@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <title>Egg Rally</title>
+    <script type="module" crossorigin src="/assets/index-Cj6TVaKz.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-C8mXFaFQ.css">
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+
+    <div id="hud" class="hidden">
+      <div class="hud-left">
+        <div id="hud-lives" class="hud-item">❤️ 0</div>
+        <div id="hud-glue" class="hud-item glue hidden"><span class="glue-icon"></span><span class="label">Glued</span><span id="hud-glue-time">15s</span></div>
+      </div>
+      <div class="hud-top">
+        <div class="hud-main"><span id="hud-main">0</span><small id="hud-unit">m</small><span id="hud-delta"></span></div>
+        <div id="hud-sub" class="hud-sub">BEST 0 m</div>
+        <div class="progress"><div id="hud-prog" class="fill"></div><div id="hud-mark" class="mark hidden"></div></div>
+        <div id="hud-time-row" class="hud-sub small hidden"><span id="hud-dist-small"></span></div>
+      </div>
+      <div class="hud-right">
+        <button id="btn-camera" class="hud-item hud-btn" aria-label="Change camera view">🎥</button>
+        <div class="hud-item coin"><span class="coin-icon"></span><span id="hud-coins">0</span></div>
+      </div>
+    </div>
+
+    <div id="menu" class="panel">
+      <h1>Egg<span>Rally</span></h1>
+      <p class="tagline">Drive as far as you can. Don't drop the egg!</p>
+      <div class="setting-label">Mode</div>
+      <div id="mode" class="segmented mode" role="group" aria-label="Game mode"></div>
+      <div id="course-row" class="hidden">
+        <div id="course" class="segmented course" role="group" aria-label="Time trial course"></div>
+        <div class="setting-blurb">Race your own ghost to the finish line.</div>
+      </div>
+      <div class="setting-label spaced">Difficulty</div>
+      <div id="difficulty" class="segmented" role="group" aria-label="Difficulty"></div>
+      <div id="difficulty-blurb" class="setting-blurb"></div>
+      <button id="btn-play" class="big">Play</button>
+      <button id="btn-garage" class="big alt">Garage &amp; Shop</button>
+      <div class="current">Driving: <b id="menu-vehicle">Pickup</b> &nbsp;·&nbsp; Terrain: <b id="menu-map">Countryside</b> &nbsp;·&nbsp; <b id="menu-lives"></b></div>
+      <label class="music-row">🎵 Music <select id="menu-music" aria-label="Background music"></select></label>
+      <label class="music-row">🎥 Camera <select id="menu-camera" aria-label="Camera view"></select></label>
+      <div class="help">
+        <div><kbd>→</kbd> / <kbd>D</kbd> Gas &nbsp; <kbd>←</kbd> / <kbd>A</kbd> Brake / Reverse</div>
+        <div><kbd>R</kbd> Restart &nbsp; <kbd>P</kbd> Pause &nbsp; <kbd>M</kbd> Mute &nbsp; <kbd>C</kbd> Camera</div>
+      </div>
+      <div class="stats"><span id="menu-best-label">Best</span>: <b id="menu-best">0 m</b> &nbsp;·&nbsp; Coins: <b id="menu-coins">0</b></div>
+    </div>
+
+    <div id="over" class="panel hidden">
+      <h2 id="over-title">Egg Smashed!</h2>
+      <div class="result"><span id="over-dist">0</span><small id="over-unit">m</small></div>
+      <div id="over-new" class="newbest hidden">New best!</div>
+      <div class="stats"><span id="over-best-label">Best</span>: <b id="over-best">0 m</b> &nbsp;·&nbsp; Coins this run: <b id="over-coins">0</b></div>
+      <button id="btn-retry" class="big">Try Again</button>
+      <button id="btn-over-garage" class="small">Garage</button>
+      <button id="btn-menu" class="small">Menu</button>
+    </div>
+
+    <div id="garage" class="panel wide hidden">
+      <div class="garage-head">
+        <h2>Garage</h2>
+        <div id="garage-tabs" class="segmented tabs" role="group" aria-label="Garage section"></div>
+        <div class="wallet"><span class="coin-icon"></span><b id="garage-coins">0</b></div>
+      </div>
+      <div id="garage-list" class="garage-list"></div>
+      <button id="btn-garage-back" class="big">Back</button>
+    </div>
+
+    <div id="paused" class="panel hidden">
+      <h2>Paused</h2>
+      <label class="music-row">🎵 Music <select id="pause-music" aria-label="Background music"></select></label>
+      <label class="music-row">🎥 Camera <select id="pause-camera" aria-label="Camera view"></select></label>
+      <button id="btn-resume" class="big">Resume</button>
+    </div>
+
+    <div id="toast" class="toast hidden" aria-live="polite"></div>
+
+    <div id="pedals" class="hidden">
+      <button id="pedal-brake" class="pedal brake" aria-label="Brake">◀</button>
+      <button id="pedal-gas" class="pedal gas" aria-label="Gas">▶</button>
+    </div>
+
+  </body>
+</html>

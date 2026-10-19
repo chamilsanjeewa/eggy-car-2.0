@@ -3,15 +3,24 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-    <title>Egg Rally</title>
+    <title>Eggy Car</title>
+    <link rel="icon" href="data:," />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@700&display=swap" />
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
+    <canvas id="game3d" class="hidden"></canvas>
     <canvas id="game"></canvas>
+    <canvas id="showroom" class="hidden" aria-hidden="true"></canvas>
 
     <div id="hud" class="hidden">
       <div class="hud-left">
+        <div id="hud-name" class="hud-item hud-name">👤 Driver</div>
         <div id="hud-lives" class="hud-item">❤️ 0</div>
+        <div id="hud-clock" class="hud-item hidden" aria-label="Time of day"></div>
+        <div id="hud-race" class="hud-item hud-race hidden" aria-label="Race standings"></div>
         <div id="hud-glue" class="hud-item glue hidden"><span class="glue-icon"></span><span class="label">Glued</span><span id="hud-glue-time">15s</span></div>
       </div>
       <div class="hud-top">
@@ -21,40 +30,97 @@
         <div id="hud-time-row" class="hud-sub small hidden"><span id="hud-dist-small"></span></div>
       </div>
       <div class="hud-right">
+        <button id="btn-pause" class="hud-item hud-btn" aria-label="Pause">⏸</button>
+        <button id="btn-nav" class="hud-item hud-btn" aria-label="Toggle navigation" aria-pressed="true">🧭</button>
+        <button id="btn-flip" class="hud-item hud-btn" aria-label="Flip the car back over (F)" title="Flip over (F)">🔄</button>
         <button id="btn-camera" class="hud-item hud-btn" aria-label="Change camera view">🎥</button>
+        <button id="btn-mute" class="hud-item hud-btn" aria-label="Mute or unmute sound (M)" title="Sound (M)">🔊</button>
         <div class="hud-item coin"><span class="coin-icon"></span><span id="hud-coins">0</span></div>
       </div>
     </div>
 
+    <button id="flip-prompt" class="flip-prompt hidden">🔄 Flip over <kbd>F</kbd></button>
+    <div id="race-count" class="race-count hidden" aria-live="assertive">3</div>
+
     <div id="menu" class="panel">
-      <h1>Egg<span>Rally</span></h1>
+      <div class="stage-caption" id="menu-caption" aria-hidden="true"></div>
+      <div class="menu-card">
+      <h1 class="bubble-title" aria-label="Eggy Car"><span class="bw" aria-hidden="true"><span class="bl egg">E</span><span class="bl egg">g</span><span class="bl egg">g</span><span class="bl egg">y</span></span><span class="bw" aria-hidden="true"><span class="bl car">C</span><span class="bl car">a</span><span class="bl car">r</span></span></h1>
       <p class="tagline">Drive as far as you can. Don't drop the egg!</p>
+      <div class="driver-name">👤 <b id="menu-name">Driver</b> <button id="btn-name" class="tiny" aria-label="Change username">✏️</button></div>
       <div class="setting-label">Mode</div>
       <div id="mode" class="segmented mode" role="group" aria-label="Game mode"></div>
       <div id="course-row" class="hidden">
         <div id="course" class="segmented course" role="group" aria-label="Time trial course"></div>
         <div class="setting-blurb">Race your own ghost to the finish line.</div>
       </div>
-      <div class="setting-label spaced">Difficulty</div>
-      <div id="difficulty" class="segmented" role="group" aria-label="Difficulty"></div>
-      <div id="difficulty-blurb" class="setting-blurb"></div>
+      <div id="race-row" class="hidden">
+        <div id="race-course" class="segmented course" role="group" aria-label="Race length"></div>
+        <div class="setting-label spaced">Rivals</div>
+        <div id="race-rivals" class="segmented" role="group" aria-label="Number of rival cars"></div>
+        <div class="setting-label spaced">Rival skill</div>
+        <div id="race-skill" class="segmented" role="group" aria-label="Rival skill"></div>
+        <div id="race-skill-blurb" class="setting-blurb"></div>
+        <div class="setting-blurb">Race computer drivers in other cars to the finish. Each carries an egg too!</div>
+      </div>
+      <div id="level-row" class="hidden">
+        <div class="level-pager">
+          <button id="level-prev" class="small" aria-label="Previous levels">◀</button>
+          <span id="level-page">Levels 1–20</span>
+          <button id="level-next" class="small" aria-label="Next levels">▶</button>
+        </div>
+        <div id="level-grid" class="level-grid" role="group" aria-label="Choose a level"></div>
+        <div class="level-jump">
+          <input id="level-jump" type="number" min="1" max="10000" placeholder="Go to level…" aria-label="Go to level" />
+          <button id="level-go" class="small">Go</button>
+          <button id="level-latest" class="small">Latest ▶</button>
+        </div>
+        <div id="level-info" class="setting-blurb level-info"></div>
+      </div>
+      <div id="diff-block">
+        <div class="setting-label spaced">Difficulty</div>
+        <div id="difficulty" class="segmented" role="group" aria-label="Difficulty"></div>
+        <div id="difficulty-blurb" class="setting-blurb"></div>
+      </div>
       <button id="btn-play" class="big">Play</button>
       <button id="btn-garage" class="big alt">Garage &amp; Shop</button>
       <div class="current">Driving: <b id="menu-vehicle">Pickup</b> &nbsp;·&nbsp; Terrain: <b id="menu-map">Countryside</b> &nbsp;·&nbsp; <b id="menu-lives"></b></div>
       <label class="music-row">🎵 Music <select id="menu-music" aria-label="Background music"></select></label>
       <label class="music-row">🎥 Camera <select id="menu-camera" aria-label="Camera view"></select></label>
+      <div class="settings-btns">
+        <button id="btn-sound-menu" class="small">🔊 Sound settings</button>
+        <button id="btn-gameplay" class="small">⚙️ Game settings</button>
+        <button id="btn-save-menu" class="small">💾 Save</button>
+        <button id="btn-achievements" class="small">🏆 Achievements</button>
+        <button id="btn-board" class="small">🏅 Leaderboard</button>
+      </div>
       <div class="help">
         <div><kbd>→</kbd> / <kbd>D</kbd> Gas &nbsp; <kbd>←</kbd> / <kbd>A</kbd> Brake / Reverse</div>
-        <div><kbd>R</kbd> Restart &nbsp; <kbd>P</kbd> Pause &nbsp; <kbd>M</kbd> Mute &nbsp; <kbd>C</kbd> Camera</div>
+        <div><kbd>R</kbd> Restart &nbsp; <kbd>P</kbd> Pause &nbsp; <kbd>M</kbd> Mute &nbsp; <kbd>C</kbd> Camera &nbsp; <kbd>N</kbd> Navigation &nbsp; <kbd>F</kbd> Flip over</div>
       </div>
       <div class="stats"><span id="menu-best-label">Best</span>: <b id="menu-best">0 m</b> &nbsp;·&nbsp; Coins: <b id="menu-coins">0</b></div>
+      <nav class="menu-links" aria-label="More">
+        <a href="/pages/how-to-play.html">How to Play</a>
+        <a href="/pages/about.html">About</a>
+        <a href="/pages/news.html">News</a>
+        <a href="/pages/leaderboard.html">Leaderboard</a>
+        <a href="/pages/contact.html">Contact</a>
+        <a href="/pages/privacy.html">Privacy</a>
+        <a href="%VITE_ROCKET_URL%" class="sister-link">🚀 Rocket Test Range</a>
+        <a href="%VITE_PLANE_URL%" class="sister-link">✈️ Sky Workshop</a>
+      </nav>
+      </div>
     </div>
 
     <div id="over" class="panel hidden">
       <h2 id="over-title">Egg Smashed!</h2>
+      <p id="over-greet" class="over-greet"></p>
       <div class="result"><span id="over-dist">0</span><small id="over-unit">m</small></div>
+      <div id="over-stars" class="over-stars hidden">★★★</div>
+      <ol id="over-standings" class="over-standings hidden"></ol>
       <div id="over-new" class="newbest hidden">New best!</div>
       <div class="stats"><span id="over-best-label">Best</span>: <b id="over-best">0 m</b> &nbsp;·&nbsp; Coins this run: <b id="over-coins">0</b></div>
+      <button id="btn-next" class="big hidden">Next Level ▶</button>
       <button id="btn-retry" class="big">Try Again</button>
       <button id="btn-over-garage" class="small">Garage</button>
       <button id="btn-menu" class="small">Menu</button>
@@ -66,6 +132,7 @@
         <div id="garage-tabs" class="segmented tabs" role="group" aria-label="Garage section"></div>
         <div class="wallet"><span class="coin-icon"></span><b id="garage-coins">0</b></div>
       </div>
+      <div id="garage-stage" class="garage-stage"><div class="stage-caption" id="garage-caption" aria-hidden="true"></div></div>
       <div id="garage-list" class="garage-list"></div>
       <button id="btn-garage-back" class="big">Back</button>
     </div>
@@ -74,7 +141,123 @@
       <h2>Paused</h2>
       <label class="music-row">🎵 Music <select id="pause-music" aria-label="Background music"></select></label>
       <label class="music-row">🎥 Camera <select id="pause-camera" aria-label="Camera view"></select></label>
+      <div class="settings-btns">
+        <button id="btn-sound-pause" class="small">🔊 Sound settings</button>
+        <button id="btn-save-pause" class="small">💾 Save</button>
+      </div>
       <button id="btn-resume" class="big">Resume</button>
+      <button id="btn-stop" class="big stop">⏹ Stop run</button>
+    </div>
+
+    <div id="sound" class="panel hidden">
+      <h2>Sound</h2>
+      <label class="toggle-row">
+        <span>🔇 Mute all</span>
+        <input id="snd-muted" type="checkbox" role="switch" />
+      </label>
+      <label class="toggle-row">
+        <span>🎧 Headphones (3D sound)<small style="display:block;font-weight:normal;font-size:12px;opacity:0.75">On: sounds come from all around you. Off: a natural stereo mix for speakers.</small></span>
+        <input id="snd-headphones" type="checkbox" role="switch" />
+      </label>
+      <label class="toggle-row">
+        <span>🛠️ Simple sound<small style="display:block;font-weight:normal;font-size:12px;opacity:0.75">Turn on if the sound stops when you play. Uses basic audio only (simpler engine sound, no 3D sound).</small></span>
+        <input id="snd-simple" type="checkbox" role="switch" />
+      </label>
+      <div class="slider-row">
+        <label for="snd-master">🔊 Master</label>
+        <input id="snd-master" type="range" min="0" max="100" step="1" />
+        <output id="snd-master-val">100%</output>
+      </div>
+      <div class="slider-row">
+        <label for="snd-music">🎵 Music</label>
+        <input id="snd-music" type="range" min="0" max="100" step="1" />
+        <output id="snd-music-val">100%</output>
+      </div>
+      <div class="slider-row">
+        <label for="snd-engine">🚗 Engine</label>
+        <input id="snd-engine" type="range" min="0" max="100" step="1" />
+        <output id="snd-engine-val">100%</output>
+      </div>
+      <div class="slider-row">
+        <label for="snd-effects">✨ Effects</label>
+        <input id="snd-effects" type="range" min="0" max="100" step="1" />
+        <output id="snd-effects-val">100%</output>
+      </div>
+      <div id="snd-status" class="snd-status" aria-live="polite"></div>
+      <button id="snd-check" class="small">🔧 Sound check</button>
+      <div id="snd-check-out" class="snd-check hidden"></div>
+      <button id="snd-test" class="small">▶ Test effects</button>
+      <button id="snd-reset" class="small">Reset</button>
+      <button id="btn-sound-back" class="big">Done</button>
+    </div>
+
+    <div id="gameplay" class="panel hidden">
+      <h2>Game Settings</h2>
+      <div class="setting-label">Graphics</div>
+      <div id="graphics" class="segmented units" role="group" aria-label="Graphics"></div>
+      <div class="setting-label">Speed units</div>
+      <div id="units" class="segmented units" role="group" aria-label="Speed units"></div>
+      <p class="setting-blurb">Switch features off for a simpler game. Changes apply from your next run.</p>
+      <label class="toggle-row option">
+        <span><b>⛽ Fuel</b><small>Fuel burns as you drive; collect cans to refuel. Off = unlimited fuel, no cans.</small></span>
+        <input id="opt-fuel" type="checkbox" role="switch" />
+      </label>
+      <label class="toggle-row option">
+        <span><b>🧴 Glue bottles</b><small>Bottles that glue the egg in for 15 s. Off = no bottles (ramps and bridges stay).</small></span>
+        <input id="opt-glue" type="checkbox" role="switch" />
+      </label>
+      <label class="toggle-row option">
+        <span><b>❤️ Extra lives &amp; armor</b><small>Save a cracked egg. Off = one crack ends the run; your lives and armor aren't used, and no ❤️ pickups appear.</small></span>
+        <input id="opt-lives" type="checkbox" role="switch" />
+      </label>
+      <label class="toggle-row option">
+        <span><b>🌧️ Weather</b><small>Rain showers on some terrains (Endless and Race): wet, slippery roads. Off = always dry.</small></span>
+        <input id="opt-weather" type="checkbox" role="switch" />
+      </label>
+      <label class="toggle-row option">
+        <span><b>🌗 Day &amp; night</b><small>Time passes as you drive: sunsets, starry nights with headlights, and dawn. Off = always daytime.</small></span>
+        <input id="opt-daynight" type="checkbox" role="switch" />
+      </label>
+      <button id="btn-gameplay-back" class="big">Done</button>
+    </div>
+
+    <div id="save" class="panel hidden">
+      <h2>Save Game</h2>
+      <p class="setting-blurb">Your progress saves automatically in this browser. Save it to a file to keep a backup or move it to another device.</p>
+      <div id="save-summary" class="save-summary"></div>
+      <button id="btn-save-file" class="big">💾 Save to file</button>
+      <button id="btn-load-file" class="big alt">📂 Load save file</button>
+      <input id="load-input" type="file" accept=".json,application/json" hidden />
+      <div id="save-status" class="save-status" aria-live="polite"></div>
+      <button id="btn-save-back" class="small">Done</button>
+    </div>
+
+    <div id="nav-alert" class="nav-alert hidden" aria-live="polite"></div>
+    <div id="achievements" class="panel hidden">
+      <h2>🏆 Achievements</h2>
+      <p class="setting-blurb">Complete goals to unlock special vehicles and terrains — they can't be bought with coins.</p>
+      <div id="ach-summary" class="ach-summary"></div>
+      <div id="ach-list" class="ach-list"></div>
+      <button id="btn-ach-back" class="big">Done</button>
+    </div>
+
+    <div id="name-panel" class="panel hidden" role="dialog" aria-labelledby="name-title">
+      <h2 id="name-title">Welcome, driver!</h2>
+      <p class="setting-blurb">Pick a username. It's shown in your runs and on the leaderboard.</p>
+      <form id="name-form" class="name-form">
+        <input id="name-input" type="text" maxlength="16" autocomplete="nickname" placeholder="Your name" aria-label="Username" />
+        <button type="button" id="name-random" class="small">🎲 Random</button>
+        <p id="name-error" class="name-error" aria-live="polite"></p>
+        <button type="submit" class="big">Let's drive!</button>
+      </form>
+    </div>
+
+    <div id="board" class="panel hidden">
+      <h2>🏅 Leaderboard</h2>
+      <div id="board-tabs" class="segmented tabs board-tabs" role="group" aria-label="Leaderboard"></div>
+      <p id="board-note" class="setting-blurb"></p>
+      <div id="board-list" class="board-list"></div>
+      <button id="btn-board-back" class="big">Done</button>
     </div>
 
     <div id="toast" class="toast hidden" aria-live="polite"></div>

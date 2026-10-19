@@ -1,6 +1,7 @@
-import { World, Vec2, Chain, Body } from "planck";
+import { CAT_BRIDGE } from "./car";
+import { World, Vec2, Chain, Body, Circle, Box, Polygon } from "planck";
 import { Difficulty } from "./difficulty";
-import { MapDef } from "./maps";
+import { MapDef, skyroadAltitude } from "./maps";
 
 /** Horizontal distance between terrain vertices, in meters. */
 export const SEG = 0.5;
@@ -64,10 +65,51 @@ export interface Coin {
 
 export const BIG_COIN_VALUE = 10;
 
+export interface ItemOptions {
+  fuel: boolean;
+  glue: boolean;
+  lives: boolean;
+}
+
 export interface Feature {
   kind: "ramp" | "fork";
   /** Ramp: x of the lip. Fork: x where the valley starts. */
   x: number;
+}
+
+/**
+ * Sky obstacles (sky terrains): hot-air balloons and floating rock islands hang in the air (solid:
+ * crash into one and the egg can crack, but you can land on top of an island), and storm clouds
+ * hover over the road, striking it with lightning every few seconds.
+ */
+export type SkyObstacleKind = "balloon" | "island" | "storm";
+
+export interface SkyObstacle {
+  kind: SkyObstacleKind;
+  x: number;
+  /** Balloon: envelope center. Island: top surface. Storm: cloud center. */
+  y: number;
+  /** Balloon envelope radius / island half-width / cloud half-width. */
+  size: number;
+  /** Look variation (0..1) and lightning timing offset. */
+  seed: number;
+  body: Body | null;
+}
+
+/** Storm cloud lightning: seconds per cycle, and when in it the warning flicker and the strike happen. */
+export const STORM = { period: 4.6, warn: 1.3, strike: 0.35, reach: 2.4 };
+
+/** Where a storm is in its cycle at time t: "idle", "warn" (flickering) or "strike" (bolt on the road). */
+export function stormPhase(o: SkyObstacle, t: number): "idle" | "warn" | "strike" {
+  const c = (((t + o.seed * STORM.period) % STORM.period) + STORM.period) % STORM.period;
+  if (c < STORM.warn) return "warn";
+  if (c < STORM.warn + STORM.strike) return "strike";
+  return "idle";
+}
+
+/** Which strike number it is (changes once per cycle), so a strike only hits a car once. */
+export function stormCycle(o: SkyObstacle, t: number): number {
+  return Math.floor((t + o.seed * STORM.period) / STORM.period);
 }
 
 export interface Fork {
@@ -94,6 +136,13 @@ class Noise1D {
   constructor(private rand: () => number) {}
 
   private lattice(i: number): number {
+    if (i < 0) {
+      // Behind the start: a hash seeded from this noise's first value, so going backwards never
+      // consumes the random sequence that shapes the course ahead.
+      const salt = this.lattice(0) * 1000;
+      const h = Math.sin(i * 127.1 + salt * 311.7) * 43758.5453;
+      return (h - Math.floor(h)) * 2 - 1;
+    }
     while (this.values.length <= i) this.values.push(this.rand() * 2 - 1);
     return this.values[i];
   }
@@ -111,12 +160,17 @@ export class Terrain {
   readonly powerUps: PowerUp[] = [];
   readonly features: Feature[] = [];
   readonly forks: Fork[] = [];
+  readonly obstacles: SkyObstacle[] = [];
+  private nextObstacleX = 70;
+  private obstacleRand: () => number;
+  private nextSkyItemX = 140;
+  private skyItemRand: () => number;
   private noiseA: Noise1D;
   private noiseB: Noise1D;
   private noiseC: Noise1D;
   private heights = new Map<number, number>();
-  private chunks: { index: number; body: Body }[] = [];
-  private nextChunk = 0;
+  /** Physics ground pieces that exist right now, by chunk index (negative = behind the start). */
+  private chunks = new Map<number, Body>();
   private nextCoinX = 35;
   private nextFeatureX: number;
   private nextFuelX = 170;
@@ -133,6 +187,8 @@ export class Terrain {
     private difficulty: Difficulty,
     readonly map: MapDef,
     readonly finishX: number | null = null,
+    /** Which pickups appear. Disabled ones are skipped but still consume randomness, so courses stay identical. */
+    readonly items: ItemOptions = { fuel: true, glue: true, lives: true },
   ) {
     this.rand = mulberry32(seed);
     this.noiseA = new Noise1D(mulberry32(seed + 1));
@@ -140,16 +196,11 @@ export class Terrain {
     this.noiseC = new Noise1D(mulberry32(seed + 3));
     this.featureRand = mulberry32(seed + 4);
     this.itemRand = mulberry32(seed + 5);
+    this.obstacleRand = mulberry32(seed + 6);
+    this.skyItemRand = mulberry32(seed + 7);
     this.nextFeatureX = 150 + 80 * this.featureRand();
     this.nextLifeX = 600 + 400 * this.itemRand();
 
-    // Wall at the far left so the car can't reverse off the world.
-    const wall = world.createBody({ type: "static" });
-    wall.createFixture({
-      shape: new Chain([new Vec2(START_X, 30), new Vec2(START_X, this.height(START_X))], false),
-      friction: map.groundFriction,
-      userData: "ground",
-    });
   }
 
   /** ---------- shape ---------- */
@@ -181,6 +232,18 @@ export class Terrain {
 
   /** Terrain (road) height at world x, including ramps and canyon valleys. */
   height(x: number): number {
+    const sr = this.map.skyroad;
+    if (sr) {
+      // The sky road: ordinary hills fade out into the climb, with just a few small bumps on it
+      const ease = (v: number) => v * v * (3 - 2 * v);
+      const flat = ease(Math.min(1, Math.max(0, (x - (sr.start - 150)) / 150)));
+      return this.plainHeight(x) * (1 - flat * 0.85) + skyroadAltitude(sr, x);
+    }
+    return this.plainHeight(x);
+  }
+
+  /** Height without the sky road (ordinary hills, ramps and forks). */
+  private plainHeight(x: number): number {
     const f = this.featureNear(x);
     if (!f) return this.baseHeight(x);
     const { line, w } = this.featureBase(f, x);
@@ -207,6 +270,18 @@ export class Terrain {
   }
 
   private baseHeight(x: number): number {
+    // Behind the start the hills carry on forever (you can reverse as far as you like).
+    if (x < -10) {
+      const s = this.map.shape;
+      const back = -10 - x;
+      const d = Math.min(1, back / this.difficulty.rampDistance);
+      const blend = Math.min(1, back / 25);
+      const h =
+        this.noiseA.at(x / s.waveA) * (2.5 + 4.5 * d) * s.ampA +
+        this.noiseB.at(x / s.waveB) * (0.8 + 1.7 * d) * s.ampB +
+        this.noiseC.at(x / s.waveC) * (0.1 + 0.35 * d) * s.ampC;
+      return h * blend * this.difficulty.hillScale;
+    }
     if (x < 10) return 0;
     const { rampDistance, hillScale } = this.difficulty;
     const d = Math.min(1, (x - 10) / rampDistance); // hills grow over the ramp distance
@@ -216,7 +291,9 @@ export class Terrain {
       this.noiseA.at(x / s.waveA) * (2.5 + 4.5 * d) * s.ampA +
       this.noiseB.at(x / s.waveB) * (0.8 + 1.7 * d) * s.ampB +
       this.noiseC.at(x / s.waveC) * (0.1 + 0.35 * d) * s.ampC;
-    return h * blend * hillScale;
+    // Journey terrains climb steadily (easing in after the start)
+    const climb = this.map.climb ? this.map.climb * Math.max(0, x - 60) * Math.min(1, Math.max(0, x - 60) / 120) : 0;
+    return h * blend * hillScale + climb;
   }
 
   /** Cached height at vertex index i (x = START_X + i * SEG). */
@@ -251,17 +328,152 @@ export class Terrain {
   update(x: number, behindX: number): void {
     // Features must be planned before any height near them is sampled.
     while (this.nextFeatureX < x + 300) this.planFeature();
+    // Ground exists from a little behind the rearmost thing we care about to well ahead of the
+    // front: rebuilt when you come back (heights are cached, so it's identical), freed when far away.
     const chunkLen = CHUNK_SEGS * SEG;
-    while (START_X + this.nextChunk * chunkLen < x + 80) {
-      this.buildChunk(this.nextChunk++);
-    }
-    while (this.chunks.length > 2 && START_X + (this.chunks[0].index + 1) * chunkLen < behindX - 30) {
-      this.world.destroyBody(this.chunks.shift()!.body);
+    const first = Math.floor((Math.min(behindX, x) - 40 - START_X) / chunkLen);
+    const last = Math.floor((x + 80 - START_X) / chunkLen);
+    for (let i = first; i <= last; i++) if (!this.chunks.has(i)) this.buildChunk(i);
+    for (const [i, body] of this.chunks) {
+      if (i < first - 1 || i > last + 1) {
+        this.world.destroyBody(body);
+        this.chunks.delete(i);
+      }
     }
     while (this.nextCoinX < x + 80) this.spawnCoins();
     while (this.nextFuelX < x + 120) this.spawnFuel();
     while (this.nextLifeX < x + 120) this.spawnLife();
     while (this.nextBigCoinX < x + 120) this.spawnBigCoin();
+    if (this.skyItems) while (this.nextSkyItemX < x + 300) this.spawnSkyItems();
+    if (this.map.skyObstacles) {
+      while (this.nextObstacleX < x + 400) this.spawnObstacles();
+      // Solid obstacles exist only near the action (rebuilt identically when you come back)
+      for (const o of this.obstacles) {
+        if (o.kind === "storm") continue;
+        const near = o.x > Math.min(behindX, x) - 40 && o.x < x + 120;
+        if (near && !o.body) o.body = this.buildObstacle(o);
+        else if (!near && o.body) {
+          this.world.destroyBody(o.body);
+          o.body = null;
+        }
+      }
+    }
+  }
+
+  /** Coins and glue up in the sky: on outdoor terrains with air (not indoors, underwater or in space). */
+  private get skyItems(): boolean {
+    const m = this.map;
+    return !!m.skyObstacles || !(m.indoor || m.skyroad || m.stages || m.bubbles || m.gravity < 5);
+  }
+
+  /** Highest road point within `half` meters of x. */
+  private roadTop(x: number, half: number): number {
+    let top = -Infinity;
+    for (let s = x - half; s <= x + half; s += 1) top = Math.max(top, this.height(s));
+    return top;
+  }
+
+  /**
+   * Every ~45–90 m on sky terrains: a low obstacle over the road (a balloon or floating island just
+   * above car height, which you hit if you jump into it, or a storm cloud), plus a couple more
+   * high up for planes to dodge.
+   */
+  private spawnObstacles(): void {
+    const r = this.obstacleRand;
+    const x = this.clearSpot(this.nextObstacleX, 12);
+    const pick = r();
+    if (x < 300) {
+      // A clear runway at the start for planes: only high obstacles
+    } else if (pick < 0.3) {
+      this.obstacles.push({ kind: "storm", x, y: this.roadTop(x, 4) + 8.5, size: 4.5, seed: r(), body: null });
+    } else if (pick < 0.65) {
+      const size = 1.5 + r() * 0.8;
+      // Basket bottom (envelope center - size - 1.7) clears the tallest vehicles by a little
+      this.obstacles.push({ kind: "balloon", x, y: this.roadTop(x, 3) + 4.2 + r() * 2.5 + size + 1.7, size, seed: r(), body: null });
+    } else {
+      const size = 2.5 + r() * 2;
+      const top = this.roadTop(x, size + 1) + 6.5 + r() * 3;
+      this.obstacles.push({ kind: "island", x, y: top, size, seed: r(), body: null });
+      // A prize on top for anyone who jumps or flies up there
+      if (r() < 0.45 && this.items.glue) this.powerUps.push({ kind: "glue", x: x - size * 0.4, y: top + 0.9, taken: false, takenAt: 0 });
+      else this.coins.push({ x: x - size * 0.4, y: top + 1, value: BIG_COIN_VALUE, taken: false, takenAt: 0 });
+      for (let k = 0; k < 3; k++) this.coins.push({ x: x + size * 0.1 + k * 1.2, y: top + 1.1, value: 1, taken: false, takenAt: 0 });
+    }
+    // High obstacles for fliers, spread up to cruising height
+    const high = 1 + Math.floor(r() * 3);
+    for (let k = 0; k < high; k++) {
+      const hx = x + 10 + r() * 60;
+      const alt = 14 + Math.pow(r(), 0.8) * 330;
+      const ground = this.height(hx);
+      if (r() < 0.6) {
+        const size = 1.8 + r() * 1.2;
+        this.obstacles.push({ kind: "balloon", x: hx, y: ground + alt, size, seed: r(), body: null });
+      } else {
+        const size = 3 + r() * 3;
+        this.obstacles.push({ kind: "island", x: hx, y: ground + alt, size, seed: r(), body: null });
+      }
+    }
+    this.obstacles.sort((a, b) => a.x - b.x);
+    this.nextObstacleX = x + 45 + r() * 45;
+  }
+
+  /** Whether a pickup at (x, y) would sit inside (or right against) a sky obstacle. */
+  private blockedInSky(x: number, y: number): boolean {
+    return this.obstacles.some((o) => o.kind !== "storm" && Math.abs(o.x - x) < o.size + 2.5 && Math.abs(o.y - y) < o.size * 2 + 3);
+  }
+
+  /**
+   * Prizes in the sky (for planes and big jumps): arcs of coins at all heights, some ending in a
+   * big coin, and now and then a glue bottle floating up high.
+   */
+  private spawnSkyItems(): void {
+    const r = this.skyItemRand;
+    const x0 = this.nextSkyItemX;
+    const alt = 15 + Math.pow(r(), 0.9) * 280;
+    const n = 6 + Math.floor(r() * 6);
+    const rise = (r() - 0.5) * 10;
+    const base = this.height(x0) + alt;
+    for (let k = 0; k < n; k++) {
+      const x = x0 + k * 3.2;
+      const y = base + (rise * k) / n + Math.sin((k / (n - 1)) * Math.PI) * 2.5;
+      if (!this.blockedInSky(x, y)) this.coins.push({ x, y, value: 1, taken: false, takenAt: 0 });
+    }
+    const endX = x0 + n * 3.2 + 2;
+    const endY = base + rise + 1;
+    if (r() < 0.4 && !this.blockedInSky(endX, endY)) this.coins.push({ x: endX, y: endY, value: BIG_COIN_VALUE, taken: false, takenAt: 0 });
+    if (r() < 0.3 && this.items.glue) {
+      const gx = endX + 15 + r() * 30;
+      const gy = this.height(gx) + 15 + r() * 250;
+      if (!this.blockedInSky(gx, gy)) this.powerUps.push({ kind: "glue", x: gx, y: gy, taken: false, takenAt: 0 });
+    }
+    this.nextSkyItemX = endX + 50 + r() * 70;
+  }
+
+  /** Island outline (top surface at y): a flat top with a rocky point hanging underneath. */
+  static islandOutline(o: SkyObstacle): Vec2[] {
+    const w = o.size;
+    const d = w * 0.9;
+    return [
+      new Vec2(o.x - w, o.y),
+      new Vec2(o.x - w * 0.8, o.y - d * 0.35),
+      new Vec2(o.x - w * 0.35, o.y - d * 0.8),
+      new Vec2(o.x + (o.seed - 0.5) * w * 0.4, o.y - d * 1.25),
+      new Vec2(o.x + w * 0.4, o.y - d * 0.75),
+      new Vec2(o.x + w * 0.85, o.y - d * 0.3),
+      new Vec2(o.x + w, o.y),
+    ];
+  }
+
+  private buildObstacle(o: SkyObstacle): Body {
+    const body = this.world.createBody({ type: "static" });
+    const fx = { friction: this.map.groundFriction, userData: "ground" };
+    if (o.kind === "balloon") {
+      body.createFixture({ shape: new Circle(new Vec2(o.x, o.y), o.size), ...fx });
+      body.createFixture({ shape: new Box(0.45, 0.4, new Vec2(o.x, o.y - o.size - 1.3), 0), ...fx });
+    } else {
+      body.createFixture({ shape: new Polygon(Terrain.islandOutline(o)), ...fx });
+    }
+    return body;
   }
 
   private buildChunk(index: number): void {
@@ -277,7 +489,7 @@ export class Terrain {
 
     const body = this.world.createBody({ type: "static" });
     body.createFixture({ shape: chain, friction: this.map.groundFriction, userData: "ground" });
-    this.chunks.push({ index, body });
+    this.chunks.set(index, body);
   }
 
   /** ---------- features ---------- */
@@ -291,11 +503,13 @@ export class Terrain {
     const x = this.calmestSpot(kind, this.nextFeatureX, this.nextFeatureX + 150);
     this.nextFeatureX = x + 180 + this.featureRand() * 220;
     if (this.finishX !== null && x > this.finishX - 80) return; // keep the finish straight clear
+    // Sky road: no ordinary jump ramps on the climb (only before it)
+    if (this.map.skyroad && x + 30 > this.map.skyroad.start - 150) return;
     this.features.push({ kind, x });
 
     if (kind === "ramp") {
       const lipY = this.height(x);
-      this.powerUps.push({ kind: "glue", x: x + RAMP.bottleDist, y: lipY + RAMP.bottleHeight, taken: false, takenAt: 0 });
+      if (this.items.glue) this.powerUps.push({ kind: "glue", x: x + RAMP.bottleDist, y: lipY + RAMP.bottleHeight, taken: false, takenAt: 0 });
       // Even higher and further: a big coin for a full-speed launch.
       this.coins.push({ x: x + 11, y: lipY + 4.4, value: BIG_COIN_VALUE, taken: false, takenAt: 0 });
     } else {
@@ -304,7 +518,7 @@ export class Terrain {
       this.buildBridge(fork);
       const mid = (FORK.gapStart + FORK.gapEnd) / 2;
       const deck = this.deckHeight(fork, mid);
-      this.powerUps.push({ kind: "glue", x: x + mid, y: deck + 1.3, taken: false, takenAt: 0 });
+      if (this.items.glue) this.powerUps.push({ kind: "glue", x: x + mid, y: deck + 1.3, taken: false, takenAt: 0 });
       this.coins.push({ x: x + mid, y: deck + 3.4, value: BIG_COIN_VALUE, taken: false, takenAt: 0 });
     }
   }
@@ -315,7 +529,7 @@ export class Terrain {
     const span = (from: number, to: number) => {
       const verts: Vec2[] = [];
       for (let d = from; d <= to + 1e-6; d += SEG) verts.push(new Vec2(fork.x + d, this.deckHeight(fork, d)));
-      body.createFixture({ shape: new Chain(verts, false), friction: this.map.groundFriction, userData: `bridge:${fork.index}` });
+      body.createFixture({ shape: new Chain(verts, false), friction: this.map.groundFriction, userData: `bridge:${fork.index}`, filterCategoryBits: CAT_BRIDGE });
     };
     span(0, FORK.gapStart);
     span(FORK.gapEnd, FORK.length);
@@ -368,14 +582,14 @@ export class Terrain {
   /** Fuel cans sit on the road every ~200–330 m. */
   private spawnFuel(): void {
     const x = this.clearSpot(this.nextFuelX, 3);
-    this.powerUps.push({ kind: "fuel", x, y: this.height(x) + 0.75, taken: false, takenAt: 0 });
+    if (this.items.fuel) this.powerUps.push({ kind: "fuel", x, y: this.height(x) + 0.75, taken: false, takenAt: 0 });
     this.nextFuelX = x + 200 + this.itemRand() * 130;
   }
 
   /** A rare extra life every ~700–1100 m. */
   private spawnLife(): void {
     const x = this.clearSpot(this.nextLifeX, 3);
-    this.powerUps.push({ kind: "life", x, y: this.height(x) + 1.2, taken: false, takenAt: 0 });
+    if (this.items.lives) this.powerUps.push({ kind: "life", x, y: this.height(x) + 1.2, taken: false, takenAt: 0 });
     this.nextLifeX = x + 700 + this.itemRand() * 400;
   }
 

@@ -1,0 +1,155 @@
+/* Shared style for the website pages (matches the game's look). */
+:root {
+  --ink: #3b2a1a;
+  --paper: #fffaf0;
+  --sky: #7ec8f0;
+  --green: #4cb848;
+  --orange: #e8a317;
+  --red: #e2483d;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  font-family: "Trebuchet MS", "Segoe UI", system-ui, sans-serif;
+  color: var(--ink);
+  background: linear-gradient(#7ec8f0, #cfeefb 60%, #f2fbff);
+  line-height: 1.55;
+}
+a { color: inherit; }
+
+.site-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 12px 20px;
+  background: var(--paper);
+  border-bottom: 4px solid var(--ink);
+}
+.brand { font-size: 28px; font-weight: bold; text-decoration: none; color: var(--orange); text-shadow: 2px 2px 0 var(--ink); }
+.brand span { color: var(--red); margin-left: 4px; }
+.site-header nav { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; }
+.site-header nav a { padding: 6px 12px; border-radius: 10px; text-decoration: none; font-weight: bold; }
+.site-header nav a:hover { background: #f3ead8; }
+.site-header nav a[aria-current="page"] { background: var(--ink); color: #fff; }
+.play-btn {
+  display: inline-block;
+  padding: 8px 18px;
+  border: 3px solid var(--ink);
+  border-radius: 12px;
+  background: var(--green);
+  color: #fff;
+  font: bold 16px inherit;
+  font-family: inherit;
+  text-decoration: none;
+  box-shadow: 0 4px 0 #2e7a2b;
+  cursor: pointer;
+}
+.play-btn:active { transform: translateY(3px); box-shadow: 0 1px 0 #2e7a2b; }
+
+.page { flex: 1; width: min(860px, calc(100% - 32px)); margin: 28px auto; display: flex; flex-direction: column; gap: 16px; }
+h1 { font-size: 40px; color: var(--orange); text-shadow: 2px 2px 0 var(--ink); }
+h2 { font-size: 22px; margin-bottom: 8px; }
+h3 { font-size: 18px; margin-bottom: 4px; }
+.lead { font-size: 18px; }
+.placeholder { font-style: italic; opacity: 0.7; }
+
+.card { background: var(--paper); border: 3px solid var(--ink); border-radius: 18px; padding: 18px 20px; box-shadow: 0 6px 0 rgba(59, 42, 26, 0.25); }
+.card ul { padding-left: 20px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.grid.two { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.stat { text-align: center; }
+.stat b { display: block; font-size: 36px; color: var(--red); }
+
+.post time { font-size: 13px; font-weight: bold; opacity: 0.6; }
+
+table { width: 100%; border-collapse: collapse; }
+td, th { padding: 8px 10px; text-align: left; border-bottom: 2px solid #eadfca; }
+th { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; }
+.board tbody tr:first-child td { font-weight: bold; color: var(--orange); }
+.keys td:first-child { width: 140px; }
+kbd { display: inline-block; min-width: 24px; padding: 0 6px; border: 2px solid var(--ink); border-bottom-width: 4px; border-radius: 6px; background: #fff; font-family: inherit; font-weight: bold; text-align: center; }
+
+.form { display: flex; flex-direction: column; gap: 12px; }
+.form label { display: flex; flex-direction: column; gap: 4px; font-weight: bold; }
+.form input, .form select, .form textarea { font: inherit; padding: 8px 10px; border: 2px solid var(--ink); border-radius: 10px; background: #fff; }
+.form button { align-self: flex-start; }
+.form-status { min-height: 22px; font-weight: bold; }
+
+.site-footer { display: flex; gap: 16px; flex-wrap: wrap; justify-content: center; padding: 16px; background: var(--ink); color: #f3ead8; font-size: 14px; }
+
+@media (max-width: 560px) {
+  h1 { font-size: 30px; }
+  .site-header { padding: 10px 16px; }
+  .page { width: calc(100% - 32px); }
+}
+.board tr.me td { background: #e6f2ff; font-weight: bold; color: #1f5fbf; }
+.note { font-size: 13px; opacity: 0.7; margin: -4px 0 8px; }
+
+/* ---------- "Eggy Car" bubble-letter title ---------- */
+/*
+ * Chunky rounded letters: a glossy two-tone fill (bright top, deeper bottom), a thick white
+ * outline, then a dark outline and a soft puffy drop shadow for depth. Each letter tilts a little.
+ */
+.bubble-title, .bubble-brand {
+  font-family: "Fredoka", "Arial Rounded MT Bold", "Nunito", system-ui, sans-serif;
+  font-weight: 700;
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.28em;
+  line-height: 1;
+  letter-spacing: 0;
+  text-shadow: none;
+}
+.bubble-title .bw, .bubble-brand .bw { display: inline-flex; }
+.bubble-title .bl, .bubble-brand .bl {
+  position: relative;
+  display: inline-block;
+  margin: 0 -0.02em;
+  background: linear-gradient(180deg, var(--bl-top) 0%, var(--bl-top) 42%, var(--bl-bot) 58%, var(--bl-bot) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-stroke: 0.06em #ffffff;
+  paint-order: stroke fill;
+  filter: drop-shadow(0 0.035em 0 #ffffff) drop-shadow(0 0 0.02em #3b2a1a) drop-shadow(0.03em 0.07em 0 #3b2a1a) drop-shadow(0 0.12em 0.08em rgba(0, 0, 0, 0.3));
+  transform: rotate(var(--bl-tilt, 0deg)) translateY(var(--bl-lift, 0));
+  transform-origin: 50% 80%;
+}
+.bubble-title .bl.egg, .bubble-brand .bl.egg { --bl-top: #ffd54a; --bl-bot: #f29b11; }
+.bubble-title .bl.car, .bubble-brand .bl.car { --bl-top: #ff6b5e; --bl-bot: #d8322a; }
+.bubble-title .bl:nth-child(4n + 1), .bubble-brand .bl:nth-child(4n + 1) { --bl-tilt: -7deg; --bl-lift: 0.03em; }
+.bubble-title .bl:nth-child(4n + 2), .bubble-brand .bl:nth-child(4n + 2) { --bl-tilt: 5deg; --bl-lift: -0.04em; }
+.bubble-title .bl:nth-child(4n + 3), .bubble-brand .bl:nth-child(4n + 3) { --bl-tilt: -3deg; --bl-lift: 0.02em; }
+.bubble-title .bl:nth-child(4n + 4), .bubble-brand .bl:nth-child(4n + 4) { --bl-tilt: 6deg; --bl-lift: -0.02em; }
+/* Glossy highlight on each letter */
+.bubble-title .bl::after, .bubble-brand .bl::after {
+  content: "";
+  position: absolute;
+  left: 22%;
+  top: 16%;
+  width: 22%;
+  height: 12%;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.75);
+  transform: rotate(-20deg);
+  pointer-events: none;
+}
+.bubble-brand { font-size: 34px; justify-content: flex-start; text-decoration: none; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .bubble-title .bl { animation: bl-bob 2.6s ease-in-out infinite; animation-delay: calc(var(--i, 0) * 0.12s); }
+  .bubble-title .bw:first-child .bl:nth-child(2) { --i: 1; }
+  .bubble-title .bw:first-child .bl:nth-child(3) { --i: 2; }
+  .bubble-title .bw:first-child .bl:nth-child(4) { --i: 3; }
+  .bubble-title .bw:last-child .bl:nth-child(1) { --i: 4; }
+  .bubble-title .bw:last-child .bl:nth-child(2) { --i: 5; }
+  .bubble-title .bw:last-child .bl:nth-child(3) { --i: 6; }
+}
+@keyframes bl-bob {
+  0%, 100% { transform: rotate(var(--bl-tilt, 0deg)) translateY(var(--bl-lift, 0)); }
+  50% { transform: rotate(var(--bl-tilt, 0deg)) translateY(calc(var(--bl-lift, 0) - 0.05em)); }
+}

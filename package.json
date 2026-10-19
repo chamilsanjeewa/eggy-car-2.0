@@ -9,9 +9,11 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "planck": "^1.4.2"
+    "planck": "^1.4.2",
+    "three": "^0.170.0"
   },
   "devDependencies": {
+    "@types/three": "^0.170.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.4"
   }

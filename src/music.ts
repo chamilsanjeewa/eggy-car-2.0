@@ -29,6 +29,7 @@ const MAJOR = [0, 2, 4, 5, 7, 9, 11];
 const MINOR = [0, 2, 3, 5, 7, 8, 10];
 const DORIAN = [0, 2, 3, 5, 7, 9, 10];
 const PHRYGIAN_DOM = [0, 1, 4, 5, 7, 8, 10];
+const MIXOLYDIAN = [0, 2, 4, 5, 7, 9, 10];
 
 export const TRACKS: Track[] = [
   {
@@ -116,6 +117,142 @@ export const TRACKS: Track[] = [
     pad: 0.012,
     drums: { kick: "x...x...x...x.x.", snare: "....x.......x...", hat: "xxxxxxxxxxxxxxxx" },
   },
+  {
+    id: "autumn",
+    name: "Autumn Stroll",
+    bpm: 92,
+    root: 55,
+    scale: MAJOR,
+    chords: [0, 5, 3, 4],
+    bass: "x.....5.x...o...",
+    melody:
+      "7 . . 6 7 . 9 . 7 . . . 4 . . . " +
+      "5 . . 4 5 . 7 . 5 . . . 2 . . . " +
+      "3 . 4 . 5 . 7 . 8 . 7 . 5 . 4 . " +
+      "2 . . 4 . . 1 . 0 . . . . . . . ",
+    lead: { wave: "triangle", volume: 0.08, length: 0.35, echo: 0.3 },
+    pad: 0.025,
+    drums: { kick: "x.......x.......", snare: "....x.......x...", hat: "..x...x...x...x." },
+  },
+  {
+    id: "beach",
+    name: "Beach Breeze",
+    bpm: 104,
+    root: 53,
+    scale: MIXOLYDIAN,
+    chords: [0, 3, 6, 3],
+    bass: "x..x..x.o..x..5.",
+    melody:
+      "4 . 4 . 5 4 . 2 . . 4 . . . . . " +
+      "6 . 6 . 7 6 . 4 . . 3 . . . . . " +
+      "4 . 4 . 5 4 . 2 . . 4 . 5 . 7 . " +
+      "6 . 4 . 3 . 2 . 0 . . . . . . . ",
+    lead: { wave: "square", volume: 0.035, length: 0.2, echo: 0.25 },
+    pad: 0.02,
+    drums: { kick: "x.....x...x.....", snare: "....x.......x...", hat: "x.xxx.xxx.xxx.xx" },
+  },
+  {
+    id: "canyon",
+    name: "Canyon Run",
+    bpm: 128,
+    root: 57,
+    scale: DORIAN,
+    chords: [0, 0, 6, 3],
+    bass: "x.x.5.x.x.x.5.o.",
+    melody:
+      "0 . . 2 3 . 4 . . . 2 . . . . . " +
+      "4 . . 6 7 . 6 . 4 . . . 3 . . . " +
+      "7 . . 6 4 . 6 . 7 . 9 . 7 . . . " +
+      "6 . 4 . 3 . 2 . 0 . . . . . . . ",
+    lead: { wave: "sawtooth", volume: 0.035, length: 0.25, echo: 0.45 },
+    pad: 0.012,
+    drums: { kick: "x...x...x...x...", snare: "....x.......x.x.", hat: "x.x.x.x.x.x.x.x." },
+  },
+  {
+    id: "night",
+    name: "Night Rider",
+    bpm: 110,
+    root: 52,
+    scale: MINOR,
+    chords: [0, 5, 2, 6],
+    bass: "xoxoxoxoxoxoxoxo",
+    melody:
+      "7 . . . 9 . 10 . 9 . . . 7 . . . " +
+      "5 . . . 7 . 9 . 7 . . . . . . . " +
+      "4 . . . 7 . 9 . 11 . . . 10 . 9 . " +
+      "8 . . . 7 . . . . . . . . . . . ",
+    lead: { wave: "sawtooth", volume: 0.035, length: 0.6, echo: 0.5 },
+    pad: 0.035,
+    drums: { kick: "x...x...x...x...", snare: "....x.......x...", hat: "..x...x...x...x." },
+  },
+  {
+    id: "retro",
+    name: "Retro Racer",
+    bpm: 150,
+    root: 60,
+    scale: MAJOR,
+    chords: [0, 3, 4, 0],
+    bass: "x.o.x.o.x.o.x.o.",
+    melody:
+      "0 2 4 7 4 2 4 . 7 . 9 . 7 . 4 . " +
+      "3 5 7 10 7 5 7 . 10 . 9 . 7 . . . " +
+      "4 6 8 11 8 6 8 . 11 . 9 . 8 . 6 . " +
+      "7 . 4 . 2 . 4 . 7 . . . . . . . ",
+    lead: { wave: "square", volume: 0.03, length: 0.1, echo: 0.1 },
+    pad: 0,
+    drums: { kick: "x...x...x...x...", snare: "....x.......x...", hat: "x.x.x.x.x.x.x.x." },
+  },
+  {
+    id: "funky",
+    name: "Funky Wheels",
+    bpm: 106,
+    root: 50,
+    scale: DORIAN,
+    chords: [0, 0, 3, 4],
+    bass: "x..x.o.x..x.5.o.",
+    melody:
+      ". . 7 . . 9 . 7 . 6 . 4 . . . . " +
+      ". . 7 . . 9 . 10 . 9 . 7 . . . . " +
+      ". . 4 . . 6 . 7 . 6 . 4 . 3 . . " +
+      "2 . . 3 . 4 . . 2 . 0 . . . . . ",
+    lead: { wave: "square", volume: 0.035, length: 0.14, echo: 0.2 },
+    pad: 0.015,
+    drums: { kick: "x..x..x...x..x..", snare: "....x.......x...", hat: "xxxxxxxxxxxxxxxx" },
+  },
+  {
+    id: "lullaby",
+    name: "Lullaby Drive",
+    bpm: 66,
+    root: 60,
+    scale: MAJOR,
+    chords: [0, 3, 5, 4],
+    bass: "x.......x.......",
+    melody:
+      "4 . . . 2 . . . 4 . 5 . 4 . . . " +
+      "3 . . . 1 . . . 3 . 4 . 3 . . . " +
+      "2 . . . 0 . . . 2 . 4 . 5 . . . " +
+      "4 . . . . . . . . . . . . . . . ",
+    lead: { wave: "sine", volume: 0.09, length: 0.9, echo: 0.45 },
+    pad: 0.035,
+    drums: { kick: "x...............", snare: "................", hat: "........x......." },
+  },
+  {
+    id: "victory",
+    name: "Victory Lap",
+    bpm: 132,
+    root: 58,
+    scale: MAJOR,
+    chords: [0, 4, 5, 3],
+    bass: "x...x.o.x...x.o.",
+    melody:
+      "7 . 7 . 7 . 4 . 7 . . . 9 . . . " +
+      "8 . 8 . 8 . 6 . 8 . . . 7 . . . " +
+      "5 . 5 . 6 . 7 . 9 . 7 . 5 . 4 . " +
+      "4 . 5 . 6 . 4 . 7 . . . . . . . ",
+    lead: { wave: "triangle", volume: 0.08, length: 0.2, echo: 0.2 },
+    pad: 0.02,
+    drums: { kick: "x...x...x...x...", snare: "....x.......x...", hat: "x.x.x.x.x.x.x.x." },
+  },
 ];
 
 /** Which track "Match terrain" plays on each map. */
@@ -125,31 +262,60 @@ export const MAP_TRACK: Record<string, string> = {
   snow: "snow",
   moon: "space",
   volcano: "lava",
+  autumn: "autumn",
+  beach: "beach",
+  canyon: "canyon",
+  swamp: "lullaby",
+  jungle: "funky",
+  city: "night",
+  candy: "retro",
+  mars: "space",
+  savanna: "beach",
+  sakura: "autumn",
+  haunted: "night",
+  reef: "lullaby",
+  glacier: "snow",
+  outback: "desert",
+  neon: "retro",
+  saltflats: "sunny",
+  highlands: "autumn",
+  factory: "retro",
+  sky: "lullaby",
+  ascent: "space",
 };
 
-const midiToHz = (m: number) => 440 * Math.pow(2, (m - 69) / 12);
-const LOOKAHEAD = 0.12; // seconds of audio scheduled ahead
-const TICK_MS = 25;
 
+const midiToHz = (m: number) => 440 * Math.pow(2, (m - 69) / 12);
+
+/**
+ * Background music. Each track's loop is rendered once into an audio buffer (offline, a fraction
+ * of a second) and then played on repeat by the browser's audio engine. Playback never depends on
+ * the game's main thread, so a busy frame (physics, rivals, graphics) can't make it drop out.
+ */
 export class Music {
-  private ctx: AudioContext | null = null;
+  private ctx: AudioContext | BaseAudioContext | null = null;
   private out: GainNode | null = null;
   private echoIn: GainNode | null = null;
   private echoDelay: DelayNode | null = null;
   private noise: AudioBuffer | null = null;
   private track: Track | null = null;
-  private step = 0;
-  private nextTime = 0;
-  private timer: number | null = null;
   private volume = 1;
+  private playlist: Track[] | null = null;
+  /** Rendered loops by track id (and the renders in progress). */
+  private cache = new Map<string, Promise<AudioBuffer>>();
+  private source: AudioBufferSourceNode | null = null;
+  private sourceGain: GainNode | null = null;
+  /** Bumped on every change, so a slow render can't start a track that's no longer wanted. */
+  private generation = 0;
+  private shuffleTimer: number | null = null;
 
   /** Connects to the shared audio context (after a user gesture). */
-  attach(ctx: AudioContext): void {
+  attach(ctx: BaseAudioContext, destination: AudioNode = ctx.destination): void {
     if (this.ctx) return;
     this.ctx = ctx;
     this.out = ctx.createGain();
     this.out.gain.value = this.volume;
-    this.out.connect(ctx.destination);
+    this.out.connect(destination);
 
     // Feedback echo used by the lead
     this.echoIn = ctx.createGain();
@@ -168,15 +334,29 @@ export class Music {
     const data = this.noise.getChannelData(0);
     for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
 
-    if (this.track) this.start();
+    if (this.playlist) this.startShuffle();
+    else if (this.track) void this.startTrack(this.track);
   }
 
   /** Plays the given track, or stops with null. */
   play(track: Track | null): void {
-    if (track?.id === this.track?.id) return;
+    if (!this.playlist && track?.id === this.track?.id) return;
+    this.playlist = null;
     this.track = track;
-    this.stop();
-    if (track && this.ctx) this.start();
+    this.stopShuffle();
+    if (!track) {
+      this.generation++;
+      this.fadeOut();
+      return;
+    }
+    if (this.ctx) void this.startTrack(track);
+  }
+
+  /** Plays random tracks from the list, one loop each. */
+  shuffle(tracks: Track[]): void {
+    if (this.playlist) return;
+    this.playlist = tracks;
+    if (this.ctx) this.startShuffle();
   }
 
   /** 0..1, smoothly applied (used for mute and pause ducking). */
@@ -185,31 +365,111 @@ export class Music {
     if (this.ctx && this.out) this.out.gain.setTargetAtTime(v, this.ctx.currentTime, 0.15);
   }
 
-  private start(): void {
-    if (!this.ctx || !this.track || !this.echoDelay) return;
-    this.step = 0;
-    this.nextTime = this.ctx.currentTime + 0.1;
-    this.echoDelay.delayTime.value = (60 / this.track.bpm) * 0.75; // dotted eighth
-    this.timer = window.setInterval(() => this.schedule(), TICK_MS);
+  /** Kept for the game loop; playback no longer needs per-frame help. */
+  tick(): void {}
+
+  /** Steps in one seamless loop: long enough for the chords and the melody to come round together. */
+  private static loopSteps(track: Track): number {
+    const gcd = (a: number, b: number): number => (b ? gcd(b, a % b) : a);
+    const chordSteps = 16 * track.chords.length;
+    const melodySteps = Math.max(1, track.melody.trim().split(/\s+/).length);
+    let steps = (chordSteps * melodySteps) / gcd(chordSteps, melodySteps);
+    while (steps < 64) steps *= 2; // at least four bars
+    return Math.min(steps, 512);
   }
 
-  private stop(): void {
-    if (this.timer !== null) window.clearInterval(this.timer);
-    this.timer = null;
-  }
-
-  private schedule(): void {
-    const ctx = this.ctx;
-    const track = this.track;
-    if (!ctx || !track) return;
-    // If the tab was in the background, don't try to catch up on missed notes.
-    if (this.nextTime < ctx.currentTime - 0.2) this.nextTime = ctx.currentTime + 0.05;
+  /** Renders a track's loop offline. The echo tail is folded back onto the start so it loops seamlessly. */
+  private loopBuffer(track: Track): Promise<AudioBuffer> {
+    const cached = this.cache.get(track.id);
+    if (cached) return cached;
+    const live = this.ctx!;
+    const sr = live.sampleRate;
     const stepDur = 60 / track.bpm / 4;
-    while (this.nextTime < ctx.currentTime + LOOKAHEAD) {
-      this.playStep(track, this.step, this.nextTime, stepDur);
-      this.step++;
-      this.nextTime += stepDur;
-    }
+    const steps = Music.loopSteps(track);
+    const loopLen = Math.round(steps * stepDur * sr);
+    const tail = Math.round(3 * sr);
+    const off = new OfflineAudioContext(1, loopLen + tail, sr);
+    const voice = new Music();
+    voice.attach(off, off.destination);
+    voice.echoDelay!.delayTime.value = (60 / track.bpm) * 0.75; // dotted eighth
+    for (let step = 0; step < steps; step++) voice.playStep(track, step, step * stepDur, stepDur);
+    const job = off.startRendering().then((full) => {
+      const loop = live.createBuffer(1, loopLen, sr);
+      const src = full.getChannelData(0);
+      const dst = loop.getChannelData(0);
+      dst.set(src.subarray(0, loopLen));
+      for (let i = 0; i < tail; i++) dst[i % loopLen] += src[loopLen + i];
+      return loop;
+    });
+    this.cache.set(track.id, job);
+    return job;
+  }
+
+  private fadeOut(): void {
+    if (!this.ctx || !this.source || !this.sourceGain) return;
+    const t = this.ctx.currentTime;
+    this.sourceGain.gain.setTargetAtTime(0, t, 0.12);
+    this.source.stop(t + 0.8);
+    this.source = null;
+    this.sourceGain = null;
+  }
+
+  /** Starts a source playing `buffer` at time `at`, fading in; looping unless `once`. */
+  private startSource(buffer: AudioBuffer, at: number, once: boolean): void {
+    const ctx = this.ctx!;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, at);
+    g.gain.linearRampToValueAtTime(1, at + 0.08);
+    g.connect(this.out!);
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    src.loop = !once;
+    src.connect(g);
+    src.start(at);
+    this.source = src;
+    this.sourceGain = g;
+  }
+
+  private async startTrack(track: Track): Promise<void> {
+    const gen = ++this.generation;
+    const buffer = await this.loopBuffer(track);
+    if (gen !== this.generation || !this.ctx) return;
+    this.fadeOut();
+    this.startSource(buffer, this.ctx.currentTime + 0.05, false);
+  }
+
+  private startShuffle(): void {
+    const gen = ++this.generation;
+    this.fadeOut();
+    this.track = this.pickNext();
+    void this.queueShuffle(this.track, this.ctx!.currentTime + 0.05, gen);
+  }
+
+  /** Plays one loop of `track` at `at`, and lines up the next random track to start right after it. */
+  private async queueShuffle(track: Track, at: number, gen: number): Promise<void> {
+    const buffer = await this.loopBuffer(track);
+    if (gen !== this.generation || !this.ctx || !this.playlist) return;
+    const start = Math.max(at, this.ctx.currentTime + 0.05);
+    this.startSource(buffer, start, true);
+    const next = this.pickNext();
+    void this.loopBuffer(next); // render the next one in the background, well before it's needed
+    const ends = start + buffer.duration;
+    const wait = Math.max(0, (ends - this.ctx.currentTime - 1.5) * 1000);
+    this.shuffleTimer = window.setTimeout(() => {
+      this.track = next;
+      void this.queueShuffle(next, ends, gen);
+    }, wait);
+  }
+
+  private stopShuffle(): void {
+    if (this.shuffleTimer !== null) window.clearTimeout(this.shuffleTimer);
+    this.shuffleTimer = null;
+  }
+
+  private pickNext(): Track {
+    const list = this.playlist!;
+    const options = list.filter((t) => t.id !== this.track?.id);
+    return options[Math.floor(Math.random() * options.length)] ?? list[0];
   }
 
   private pitch(track: Track, degree: number, octave = 0): number {

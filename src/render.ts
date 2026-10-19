@@ -1,9 +1,12 @@
 import { Vec2, Body } from "planck";
 import { Car, eggOutline, rideHeight, EGG_RX, EGG_RY_TOP } from "./car";
 import { VehicleDef, WheelDef } from "./vehicles";
-import { MapDef } from "./maps";
-import { CockpitState, DashInfo, drawCabin, drawDashboard, drawSteeringWheel, drawMirrorFrame, mirrorRect, Rect } from "./cockpit";
-import { Terrain, RAMP, FORK, Fork, BIG_COIN_VALUE } from "./terrain";
+import { MapDef, viewMap } from "./maps";
+import { InteriorStyle, DEFAULT_STYLE } from "./interior";
+import { CockpitState, DashInfo, Attitude, drawGyro, drawNav, sideMirrorRects, drawSideMirrorFrame, drawDashToy, drawCabin, drawGlass, drawHood, drawDashboard, drawSteeringWheel, drawMirrorFrame, mirrorRect, Rect, cabinLight, litStyle, litColor, drawInstrumentGlow, drawRainGlass, drawGlassLight } from "./cockpit";
+import { drawFirstPerson, bodyColor, drawHeadlightPool } from "./firstperson";
+import { daylight } from "./daynight";
+import { Terrain, RAMP, FORK, Fork, BIG_COIN_VALUE, SkyObstacle, stormPhase, STORM } from "./terrain";
 
 export interface Camera {
   x: number;
@@ -52,12 +55,25 @@ export interface GhostPose {
   a: number;
 }
 
+/** A computer rival in Race mode. */
+export interface RivalView {
+  car: Car;
+  name: string;
+  eggBroken: boolean;
+}
+
 export interface Gauges {
   kmh: number;
+  /** Show miles per hour instead of km/h. */
+  mph: boolean;
+  /** The engine's redline, for the rev ring. */
+  redline: number;
   rpm: number;
   gear: number;
-  /** 0..1 */
+  /** 0..1, or -1 when fuel is switched off */
   fuel: number;
+  /** Truck tilt vs the ground, for the gyro. */
+  attitude: Attitude;
 }
 
 export interface Scene {
@@ -77,6 +93,12 @@ export interface Scene {
   armor: number;
   /** Set when the camera is inside the car (driver view). */
   cockpit: CockpitState | null;
+  /** Race mode rivals (empty otherwise). */
+  rivals: RivalView[];
+  /** Rain intensity 0..1 (0 = dry). */
+  rain: number;
+  /** Time of day 0..1 (0 = midnight, 0.5 = noon), or null where the terrain has a fixed time. */
+  dayTime: number | null;
   /** Time-trial ghost of your best run. */
   ghost: { def: VehicleDef; pose: GhostPose | null } | null;
   /** Seconds since the egg smashed (full-screen splatter), or null. */
@@ -85,9 +107,14 @@ export interface Scene {
   shake: number;
   gauges: Gauges;
   dash: Omit<DashInfo, "terrain" | "carX">;
+  /** Chosen car interior (driver's seat). */
+  interior: InteriorStyle;
+  /** Show the navigation minimap (outside the driver's seat, which has its own). */
+  navMap: boolean;
 }
 
 const EGG_SHAPE = eggOutline(48);
+export const KMH_TO_MPH = 0.621371;
 const GLASS = "#bfe8f7";
 
 export class Renderer {
@@ -123,16 +150,32 @@ export class Renderer {
     const shakeX = (Math.random() - 0.5) * scene.shake + (scene.cockpit?.shakeX ?? 0);
     const shakeY = (Math.random() - 0.5) * scene.shake + (scene.cockpit?.shakeY ?? 0);
 
+    // Driver's seat: a first-person road view with the cabin around it.
+    if (scene.cockpit) {
+      const st = scene.cockpit;
+      const chassis = scene.car.chassis;
+      const d = scene.car.def.driver;
+      const eye = chassis.getWorldPoint({ x: d.x + 0.05, y: d.y + 0.12 + st.bob });
+      ctx.setTransform(this.dpr, 0, 0, this.dpr, shakeX * this.dpr, shakeY * this.dpr);
+      drawFirstPerson(ctx, w, h, scene, { x: eye.x, y: eye.y, pitch: st.viewPitch - st.surge * 0.14 });
+      ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+      drawDayTint(ctx, w, h, scene);
+      drawHeadlightPool(ctx, w, h, nightOf(scene));
+      this.drawCabinView(scene, st, true);
+      if (scene.smash !== null) drawSmash(ctx, w, h, scene.smash);
+      return;
+    }
+
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     if (cam.angle === 0) {
-      paintSky(ctx, w, h, scene.terrain.map, scene.time, cam.x * cam.scale, cam.y * cam.scale);
+      paintSky(ctx, w, h, viewMap(scene.terrain.map, cam.x), scene.time, cam.x * cam.scale, cam.y * cam.scale);
     } else {
       // Rotated view: draw the sky oversized so the corners stay covered.
       const pad = Math.hypot(w, h) / 2 - Math.min(w, h) / 2 + 2;
       ctx.translate(w / 2, h / 2);
       ctx.rotate(cam.angle);
       ctx.translate(-w / 2 - pad, -h / 2 - pad);
-      paintSky(ctx, w + pad * 2, h + pad * 2, scene.terrain.map, scene.time, cam.x * cam.scale, cam.y * cam.scale);
+      paintSky(ctx, w + pad * 2, h + pad * 2, viewMap(scene.terrain.map, cam.x), scene.time, cam.x * cam.scale, cam.y * cam.scale);
       ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     }
 
@@ -153,8 +196,21 @@ export class Renderer {
     if (scene.cockpit) {
       this.drawCockpit(scene, scene.cockpit);
     } else {
-      this.vignette();
+      drawDayTint(this.ctx, w, h, scene);
+    if (scene.rain > 0) drawRain(this.ctx, w, h, scene.time, scene.rain);
+    this.vignette();
       drawGauges(ctx, w, h, scene.gauges);
+      if (scene.navMap) {
+        // Top-right corner, under the coin counter
+        const nw = Math.max(170, Math.min(320, w * 0.3));
+        const nh = Math.round(nw * 0.46);
+        const narrow = w < 560;
+        drawNav(ctx, w - nw - 16, narrow ? 140 : 64, nw, nh, {
+          ...scene.dash,
+          terrain: scene.terrain,
+          carX: scene.car.chassis.getPosition().x,
+        });
+      }
     }
     if (scene.smash !== null) drawSmash(ctx, w, h, scene.smash);
   }
@@ -168,15 +224,73 @@ export class Renderer {
     ctx.fillRect(0, 0, w, h);
   }
 
-  /** Inside-the-car overlay: cabin, live rear-view mirror showing the egg, dashboard and wheel. */
-  private drawCockpit(scene: Scene, st: CockpitState): void {
+  /**
+   * Overlays for the 3D renderer: draws onto a transparent canvas above the WebGL view.
+   * Gauges, navigation and smash effects; or, in the driver's seat, the whole cabin
+   * (the 3D renderer fills the mirror itself).
+   */
+  drawOverlay(scene: Scene): void {
     const { ctx, width: w, height: h } = this;
-    drawCabin(ctx, w, h);
+    ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    if (scene.rain > 0) drawRain(ctx, w, h, scene.time, scene.rain);
+    if (scene.cockpit) {
+      this.drawCabinView(scene, scene.cockpit, false);
+    } else {
+      this.vignette();
+      drawGauges(ctx, w, h, scene.gauges);
+      if (scene.navMap) {
+        const nw = Math.max(170, Math.min(320, w * 0.3));
+        const nh = Math.round(nw * 0.46);
+        drawNav(ctx, w - nw - 16, w < 560 ? 140 : 64, nw, nh, { ...scene.dash, terrain: scene.terrain, carX: scene.car.chassis.getPosition().x });
+      }
+    }
+    if (scene.smash !== null) drawSmash(ctx, w, h, scene.smash);
+  }
+
+  /** Everything inside the car over the outside view: glass (rain, wipers, glare), hood, cabin. */
+  private drawCabinView(scene: Scene, st: CockpitState, drawMirrorImage: boolean): void {
+    const { ctx, width: w, height: h } = this;
+    const map = scene.terrain.map;
+    const light = cabinLight(nightOf(scene), map.wet ?? 0);
+    const style = scene.interior ?? DEFAULT_STYLE;
+    drawGlass(ctx, w, h, st.speedKmh, scene.time);
+    drawGlassLight(ctx, w, h, style.dash[1], light);
+    if (scene.rain > 0) drawRainGlass(ctx, w, h, scene.time, scene.rain, st.speedKmh);
+    drawHood(ctx, w, h, litColor(bodyColor(scene.car.def.parts), light));
+    this.drawCockpit(scene, st, drawMirrorImage);
+  }
+
+  /** Inside-the-car overlay: cabin, live rear-view mirror showing the egg, dashboard and wheel. */
+  private drawCockpit(scene: Scene, st: CockpitState, drawMirrorImage = true): void {
+    const { ctx, width: w, height: h } = this;
+    const map = scene.terrain.map;
+    const light = cabinLight(nightOf(scene), map.wet ?? 0);
+    const style = litStyle(scene.interior ?? DEFAULT_STYLE, light);
+    drawCabin(ctx, w, h, style);
     const mirror = mirrorRect(w, h);
-    this.drawMirror(scene, mirror);
-    drawMirrorFrame(ctx, mirror, st);
-    drawDashboard(ctx, w, h, st, { ...scene.dash, terrain: scene.terrain, carX: scene.car.chassis.getPosition().x });
-    drawSteeringWheel(ctx, w, h, st);
+    if (drawMirrorImage) this.drawMirror(scene, mirror);
+    drawMirrorFrame(ctx, mirror, st, style);
+    // Door mirrors (the 3D renderer fills their glass itself)
+    const sides = sideMirrorRects(w, h);
+    for (const side of ["left", "right"] as const) {
+      if (drawMirrorImage) this.drawMirror(scene, sides[side]);
+      drawSideMirrorFrame(ctx, sides[side], side);
+    }
+    // Red pulse around the edges when the egg is about to fall out
+    if (scene.dash.egg === "danger") {
+      const a = 0.18 + 0.14 * Math.sin(performance.now() / 90);
+      const g = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.35, w / 2, h / 2, Math.hypot(w, h) * 0.6);
+      g.addColorStop(0, "rgba(255,40,30,0)");
+      g.addColorStop(1, `rgba(255,40,30,${a})`);
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, w, h);
+    }
+    drawDashboard(ctx, w, h, st, { ...scene.dash, terrain: scene.terrain, carX: scene.car.chassis.getPosition().x }, style);
+    // Instruments are backlit: they glow in a dark cabin
+    if (light.night) drawInstrumentGlow(ctx, w, h, (scene.interior ?? DEFAULT_STYLE).accent);
+    drawDashToy(ctx, w, h, st, style);
+    drawSteeringWheel(ctx, w, h, st, style);
   }
 
   /** Renders the truck bed and egg, flipped like a real mirror, into the mirror's glass. */
@@ -217,11 +331,19 @@ export class Renderer {
     this.drawTerrain(t, left, right, bottom, full);
     this.drawBridges(t, left, right);
     this.drawRamps(t, left, right);
+    if (t.obstacles.length) this.drawSkyObstacles(t, scene.time, left, right);
     if (full) this.drawMarkers(t, left, right);
     this.drawFinish(t, left, right);
     this.drawCoins(scene, left, right);
     this.drawPowerUps(scene, left, right);
     if (scene.ghost?.pose) this.drawGhost(scene.ghost.def, scene.ghost.pose);
+    for (const r of scene.rivals) {
+      const x = r.car.chassis.getPosition().x;
+      if (x < left - 6 || x > right + 6) continue;
+      this.drawCar(r.car);
+      if (!r.eggBroken) this.withBody(r.car.egg, () => drawEggShape(this.ctx));
+      this.drawNameTag(r);
+    }
     this.drawDust(scene.dust);
     this.drawShadow(scene);
     this.drawCar(scene.car);
@@ -236,9 +358,20 @@ export class Renderer {
 
   // ---------- world ----------
 
+  /** Balloons, floating islands and storm clouds (sky terrains). */
+  private drawSkyObstacles(terrain: Terrain, time: number, left: number, right: number): void {
+    const { ctx } = this;
+    for (const o of terrain.obstacles) {
+      if (o.x + o.size + 2 < left || o.x - o.size - 2 > right) continue;
+      if (o.kind === "balloon") drawBalloon(ctx, o, time);
+      else if (o.kind === "island") drawIsland(ctx, o);
+      else drawStorm(ctx, o, time, terrain.height(o.x));
+    }
+  }
+
   private drawTerrain(terrain: Terrain, left: number, right: number, bottom: number, full: boolean): void {
     const { ctx } = this;
-    const map = terrain.map;
+    const map = viewMap(terrain.map, (left + right) / 2);
     const i0 = terrain.vertexIndex(left);
     const i1 = terrain.vertexIndex(right) + 1;
 
@@ -332,6 +465,16 @@ export class Renderer {
     ctx.lineWidth = 0.26;
     ctx.strokeStyle = map.top[1];
     ctx.stroke(surface);
+    // Conveyor belt: rib marks along the top that move forward at the belt speed
+    if (map.conveyor) {
+      ctx.save();
+      ctx.lineWidth = 0.22;
+      ctx.strokeStyle = "#5a5d63";
+      ctx.setLineDash([0.12, 0.28]);
+      ctx.lineDashOffset = -((performance.now() / 1000) * map.conveyor) % 0.4;
+      ctx.stroke(surface);
+      ctx.restore();
+    }
 
     // Grass blades on grassy maps
     if (full && GRASSY.has(map.id)) {
@@ -364,34 +507,51 @@ export class Renderer {
       if (lip + 1 < left || signX - 1 > right) continue;
       const base = terrain.height(start - 1);
 
-      ctx.fillStyle = "#5e3b1d";
-      for (let x = start + 2; x <= lip; x += 2.4) {
-        const top = terrain.height(x);
-        ctx.fillRect(x - 0.08, base - 0.2, 0.16, top - base + 0.2);
-      }
+      // Steel truss under the deck: legs with diagonal cross-bracing
+      const legs: number[] = [];
+      for (let x = start + 1.4; x <= lip + 0.001; x += 1.4) legs.push(Math.min(x, lip - 0.08));
+      ctx.lineCap = "butt";
+      legs.forEach((x, i) => {
+        const top = terrain.height(x) - 0.1;
+        ctx.fillStyle = "#7d838c";
+        ctx.fillRect(x - 0.06, base - 0.1, 0.12, top - base + 0.1);
+        const prev = legs[i - 1];
+        if (prev !== undefined) {
+          ctx.strokeStyle = "#6a7079";
+          ctx.lineWidth = 0.05;
+          ctx.beginPath();
+          ctx.moveTo(x, base);
+          ctx.lineTo(prev, terrain.height(prev) - 0.1);
+          ctx.stroke();
+        }
+      });
+      // End frame at the lip
+      ctx.fillStyle = "#5b616a";
+      ctx.fillRect(lip - 0.05, base - 0.1, 0.1, terrain.height(lip) - base + 0.1);
+      // Thick steel deck with a bright top edge and tread marks
       const deck = new Path2D();
       deck.moveTo(start, terrain.height(start));
       for (let x = start + 0.25; x <= lip + 0.001; x += 0.25) deck.lineTo(x, terrain.height(x) + 0.02);
-      ctx.lineCap = "butt";
-      ctx.lineWidth = 0.3;
-      ctx.strokeStyle = "#7a4e26";
+      ctx.lineWidth = 0.32;
+      ctx.strokeStyle = "#4a4f57";
       ctx.stroke(deck);
-      ctx.lineWidth = 0.18;
-      ctx.strokeStyle = "#c08a4e";
+      ctx.lineWidth = 0.2;
+      ctx.strokeStyle = "#a3aab3";
       ctx.stroke(deck);
-      ctx.strokeStyle = "#5e3b1d";
-      ctx.lineWidth = 0.04;
-      for (let x = start + 0.6; x < lip; x += 0.6) {
-        const y = terrain.height(x);
-        ctx.beginPath();
-        ctx.moveTo(x, y - 0.13);
-        ctx.lineTo(x, y + 0.15);
-        ctx.stroke();
+      ctx.lineWidth = 0.05;
+      ctx.strokeStyle = "#dfe3e8";
+      ctx.save();
+      ctx.translate(0, 0.07);
+      ctx.stroke(deck);
+      ctx.restore();
+      ctx.fillStyle = "rgba(40,44,50,0.55)";
+      for (let x = start + 0.3; x < lip; x += 0.35) ctx.fillRect(x, terrain.height(x) - 0.03, 0.12, 0.04);
+      // Yellow/black hazard stripe on the lip
+      const ly = terrain.height(lip);
+      for (let k = 0; k < 4; k++) {
+        ctx.fillStyle = k % 2 ? "#1c1c1f" : "#f5c400";
+        ctx.fillRect(lip - 0.12, ly - 0.15 * (k + 1), 0.24, 0.15);
       }
-      ctx.fillStyle = "#e2483d";
-      ctx.fillRect(lip - 0.12, terrain.height(lip) - 0.6, 0.24, 0.6);
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(lip - 0.12, terrain.height(lip) - 0.4, 0.24, 0.15);
 
       drawSign(ctx, signX, terrain.height(signX), (c) => {
         c.strokeStyle = "#2b1d12";
@@ -589,7 +749,7 @@ export class Renderer {
       ctx.translate(pu.x, y);
       if (pu.kind !== "fuel") ctx.rotate(Math.sin(scene.time * 2 + pu.x) * 0.15);
       ctx.scale(k, k);
-      if (pu.kind === "glue") drawGlueBottle(ctx);
+      if (pu.kind === "glue") drawGlueBottle(ctx, scene.time);
       else if (pu.kind === "fuel") drawFuelCan(ctx);
       else drawLifeHeart(ctx, scene.time);
       ctx.restore();
@@ -747,6 +907,26 @@ export class Renderer {
     const { ctx } = this;
     const def = car.def;
 
+    // Rocket flame out of the back (drawn behind the body)
+    if (def.rocket && car.rocketOn > 0.02) {
+      const rk = def.rocket;
+      this.withBody(car.chassis, () => {
+        const len = (0.6 + car.rocketOn * 1.6) * (0.85 + Math.random() * 0.3);
+        const g = ctx.createLinearGradient(rk.x, 0, rk.x - len, 0);
+        g.addColorStop(0, "rgba(220, 240, 255, 0.95)");
+        g.addColorStop(0.25, "rgba(255, 200, 80, 0.9)");
+        g.addColorStop(0.7, "rgba(255, 110, 30, 0.6)");
+        g.addColorStop(1, "rgba(255, 80, 20, 0)");
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.moveTo(rk.x, rk.y + 0.14);
+        ctx.quadraticCurveTo(rk.x - len * 0.5, rk.y + 0.2, rk.x - len, rk.y);
+        ctx.quadraticCurveTo(rk.x - len * 0.5, rk.y - 0.2, rk.x, rk.y - 0.14);
+        ctx.closePath();
+        ctx.fill();
+      });
+    }
+
     // Suspension struts (drawn under the body)
     ctx.strokeStyle = "#4a4a4a";
     ctx.lineWidth = 0.12;
@@ -771,6 +951,27 @@ export class Renderer {
       }
     });
     car.wheels.forEach((w, i) => this.withBody(w, () => drawWheel(ctx, def, def.wheels[i].r)));
+  }
+
+  /** Rival's name floating above their car. */
+  private drawNameTag(r: RivalView): void {
+    const { ctx } = this;
+    const p = r.car.chassis.getPosition();
+    ctx.save();
+    ctx.translate(p.x, p.y + 2.1);
+    ctx.scale(0.022, -0.022);
+    ctx.font = "bold 18px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const label = r.eggBroken ? `💥 ${r.name}` : r.name;
+    const w = ctx.measureText(label).width + 16;
+    ctx.fillStyle = "rgba(20, 24, 32, 0.6)";
+    ctx.beginPath();
+    ctx.roundRect(-w / 2, -13, w, 26, 13);
+    ctx.fill();
+    ctx.fillStyle = "#fff";
+    ctx.fillText(label, 0, 1);
+    ctx.restore();
   }
 
   /** Translucent replay of your best time-trial run. */
@@ -858,7 +1059,7 @@ export class Renderer {
 }
 
 const SEG_DRAW = 0.5;
-const GRASSY = new Set(["countryside", "autumn"]);
+const GRASSY = new Set(["countryside", "autumn", "jungle", "swamp", "savanna", "sakura"]);
 
 // ---------- small world-space helpers ----------
 
@@ -933,6 +1134,7 @@ export function drawChassis(ctx: CanvasRenderingContext2D, def: VehicleDef): voi
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
   const hasGlass = def.parts.some((p) => p.fill === GLASS);
+
 
   for (const part of def.parts) {
     tracePoly(ctx, part.pts);
@@ -1208,31 +1410,49 @@ export function drawVehiclePreview(canvas: HTMLCanvasElement, def: VehicleDef): 
 
 // ---------- terrain themes (shared by the game and garage previews) ----------
 
-function hash(i: number): number {
+export function hash(i: number): number {
   const r = Math.sin(i * 12.9898) * 43758.5453;
   return r - Math.floor(r);
 }
 
-function mixColor(a: string, b: string, t: number): string {
-  const pa = parseInt(a.slice(1), 16);
-  const pb = parseInt(b.slice(1), 16);
-  const ch = (p: number, s: number) => (p >> s) & 255;
-  const m = (s: number) => Math.round(ch(pa, s) + (ch(pb, s) - ch(pa, s)) * t);
-  return `rgb(${m(16)}, ${m(8)}, ${m(0)})`;
+/** Parses "#rrggbb" or "rgb(r, g, b)" into [r, g, b]. */
+function rgbOf(c: string): [number, number, number] {
+  if (c.startsWith("#")) {
+    const n = parseInt(c.slice(1), 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+  const m = c.match(/\d+(\.\d+)?/g);
+  return m && m.length >= 3 ? [Number(m[0]), Number(m[1]), Number(m[2])] : [0, 0, 0];
+}
+
+/** Blends color a toward b by t (0..1). Accepts hex or rgb() colors. */
+export function mixColor(a: string, b: string, t: number): string {
+  const ca = rgbOf(a);
+  const cb = rgbOf(b);
+  const m = (i: number) => Math.round(ca[i] + (cb[i] - ca[i]) * t);
+  return `rgb(${m(0)}, ${m(1)}, ${m(2)})`;
 }
 
 /** Paints the sky, sun/planet, stars, clouds, haze, sea and distant hills in screen space. */
-function paintSky(ctx: CanvasRenderingContext2D, w: number, h: number, map: MapDef, time: number, camXpx: number, camYpx: number): void {
-  const g = ctx.createLinearGradient(0, 0, 0, h);
-  g.addColorStop(0, map.sky[0]);
-  g.addColorStop(0.7, map.sky[1]);
-  g.addColorStop(1, map.sky[2]);
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, w, h);
+/**
+ * The sky and distant scenery. With `backdropOnly` (3D, where a shader sky dome draws the
+ * gradient, sun, clouds and stars) only the far layers are painted, on a transparent canvas.
+ */
+export function paintSky(ctx: CanvasRenderingContext2D, w: number, h: number, map: MapDef, time: number, camXpx: number, camYpx: number, backdropOnly = false): void {
+  if (backdropOnly) {
+    ctx.clearRect(0, 0, w, h);
+  } else {
+    const g = ctx.createLinearGradient(0, 0, 0, h);
+    g.addColorStop(0, map.sky[0]);
+    g.addColorStop(0.7, map.sky[1]);
+    g.addColorStop(1, map.sky[2]);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+  }
 
   const scale = Math.min(1, h / 600);
 
-  if (map.stars) {
+  if (map.stars && !backdropOnly) {
     for (let i = 0; i < 120; i++) {
       const x = (((hash(i) * w * 3 - camXpx * 0.02) % w) + w) % w;
       const y = hash(i + 500) * h * 0.75;
@@ -1243,7 +1463,23 @@ function paintSky(ctx: CanvasRenderingContext2D, w: number, h: number, map: MapD
     }
   }
 
-  // Sun with a wide soft glow
+  // Sun with a wide soft glow (in 3D the sky dome draws the sun; a planet is still painted here)
+  if (!backdropOnly || map.planet) paintSun(ctx, w, h, map, scale);
+  if (map.clouds && !backdropOnly) {
+    const span = w + 400;
+    for (let i = 0; i < 7; i++) {
+      const depth = 0.03 + (i % 3) * 0.025;
+      const base = i * 377 + time * (4 + (i % 3) * 3) - camXpx * depth;
+      const x = (((base % span) + span) % span) - 200;
+      const y = (40 + ((i * 97) % 180)) * Math.max(0.5, scale);
+      const k = (0.6 + ((i * 31) % 10) / 14) * Math.max(0.6, scale);
+      cloud(ctx, x, y, k, map.clouds, i);
+    }
+  }
+  paintBackdrop(ctx, w, h, map, time, camXpx, camYpx, scale);
+}
+
+function paintSun(ctx: CanvasRenderingContext2D, w: number, h: number, map: MapDef, scale: number): void {
   const sx = w * 0.82;
   const sy = h * 0.18;
   const r = map.sun.radius * Math.max(0.6, scale);
@@ -1282,23 +1518,10 @@ function paintSky(ctx: CanvasRenderingContext2D, w: number, h: number, map: MapD
     ctx.fillRect(sx - r, sy - r, r * 2, r * 2);
     ctx.restore();
   }
+}
 
-  if (map.clouds) {
-    const span = w + 400;
-    for (let i = 0; i < 7; i++) {
-      const depth = 0.03 + (i % 3) * 0.025;
-      const base = i * 377 + time * (4 + (i % 3) * 3) - camXpx * depth;
-      const x = (((base % span) + span) % span) - 200;
-      const y = (40 + ((i * 97) % 180)) * Math.max(0.5, scale);
-      const k = (0.6 + ((i * 31) % 10) / 14) * Math.max(0.6, scale);
-      ctx.fillStyle = map.clouds;
-      cloud(ctx, x, y, k);
-      // Shaded underside
-      ctx.fillStyle = "rgba(0,0,0,0.06)";
-      ctx.fillRect(x - 4 * k, y + 10 * k, 64 * k, 12 * k);
-    }
-  }
-
+/** Far mountains, sea, skyline, near hills, haze and snow: the distant scenery layers. */
+function paintBackdrop(ctx: CanvasRenderingContext2D, w: number, h: number, map: MapDef, time: number, camXpx: number, camYpx: number, scale: number): void {
   // Far mountains, then mid hills: each layer fades toward the horizon color (aerial perspective).
   const haze = map.sky[2];
   hillLayer(ctx, w, h, camXpx * 0.06, camYpx * 0.02, h * 0.56, 95 * scale, 0.0013, mixColor(map.hills[0], haze, 0.55), 0.4);
@@ -1321,6 +1544,8 @@ function paintSky(ctx: CanvasRenderingContext2D, w: number, h: number, map: MapD
       ctx.stroke();
     }
   }
+  if (map.skyline) drawSkyline(ctx, w, h, camXpx * 0.25, map.skyline, time);
+  if (map.decor === "robot") drawWalkingRobots(ctx, w, h, camXpx * 0.3, scale);
   hillLayer(ctx, w, h, camXpx * 0.35, camYpx * 0.105, h * 0.76, 55 * scale, 0.0042, map.hills[1], 4.1);
   // Low haze band
   const hz = ctx.createLinearGradient(0, h * 0.55, 0, h * 0.85);
@@ -1340,8 +1565,54 @@ function paintSky(ctx: CanvasRenderingContext2D, w: number, h: number, map: MapD
       ctx.fill();
     }
   }
+  if (map.dust) {
+    // Dust storm: streaks blowing sideways
+    ctx.fillStyle = map.dust;
+    for (let i = 0; i < 90; i++) {
+      const speed = 60 + hash(i) * 120;
+      const x = (((hash(i + 7) * w * 2 - time * speed - camXpx * 0.5) % w) + w) % w;
+      const y = (((hash(i + 13) * h + Math.sin(time * 0.7 + i) * 20) % h) + h) % h;
+      ctx.fillRect(x, y, 3 + hash(i + 3) * 6, 1.5);
+    }
+  }
+  if (map.bubbles) {
+    ctx.strokeStyle = "rgba(220, 245, 255, 0.55)";
+    ctx.lineWidth = 1.2;
+    for (let i = 0; i < 50; i++) {
+      const speed = 25 + hash(i) * 45;
+      const x = (((hash(i + 7) * w * 2 + Math.sin(time * 2 + i) * 6 - camXpx * 0.3) % w) + w) % w;
+      const y = h - ((((hash(i + 13) * h + time * speed) % h) + h) % h);
+      ctx.beginPath();
+      ctx.arc(x, y, 2 + hash(i + 3) * 4, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    // Light rays from the surface
+    ctx.fillStyle = "rgba(220, 245, 255, 0.05)";
+    for (let i = 0; i < 5; i++) {
+      const x = (((i * 260 + Math.sin(time * 0.3 + i) * 40 - camXpx * 0.05) % (w + 300)) + w + 300) % (w + 300) - 150;
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x + 70, 0);
+      ctx.lineTo(x + 170, h);
+      ctx.lineTo(x + 40, h);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+  if (map.mist) {
+    for (let i = 0; i < 4; i++) {
+      const y = h * (0.62 + i * 0.09);
+      const off = (((time * (8 + i * 5) - camXpx * (0.2 + i * 0.1)) % (w * 2)) + w * 2) % (w * 2);
+      const g = ctx.createLinearGradient(0, y - 30, 0, y + 30);
+      g.addColorStop(0, "rgba(255,255,255,0)");
+      g.addColorStop(0.5, "rgba(240,248,240,0.16)");
+      g.addColorStop(1, "rgba(255,255,255,0)");
+      ctx.fillStyle = g;
+      ctx.fillRect(-off, y - 30, w * 3, 60);
+    }
+  }
   if (map.leaves) {
-    const colors = ["#e0782a", "#c94f1f", "#f2b33d", "#a8662a"];
+    const colors = map.leafColors ?? ["#e0782a", "#c94f1f", "#f2b33d", "#a8662a"];
     for (let i = 0; i < 40; i++) {
       const speed = 25 + hash(i) * 30;
       const x = (((hash(i + 7) * w * 2 + Math.sin(time * 0.8 + i) * 40 - camXpx * 0.4 - time * 20) % w) + w) % w;
@@ -1358,13 +1629,39 @@ function paintSky(ctx: CanvasRenderingContext2D, w: number, h: number, map: MapD
   }
 }
 
-function cloud(ctx: CanvasRenderingContext2D, x: number, y: number, k: number): void {
-  ctx.beginPath();
-  ctx.arc(x, y, 22 * k, 0, Math.PI * 2);
-  ctx.arc(x + 26 * k, y - 12 * k, 28 * k, 0, Math.PI * 2);
-  ctx.arc(x + 56 * k, y, 22 * k, 0, Math.PI * 2);
-  ctx.rect(x, y, 56 * k, 22 * k);
-  ctx.fill();
+/**
+ * A soft, fluffy cumulus: overlapping puffs, each lit from above (a bright top fading into a
+ * slightly shaded underside), with a flat-ish base like real fair-weather clouds.
+ */
+function cloud(ctx: CanvasRenderingContext2D, x: number, y: number, k: number, color: string, seed: number): void {
+  const [r, g, b, a] = rgbaOf(color);
+  const puffs = 6;
+  for (let i = 0; i < puffs; i++) {
+    const t = i / (puffs - 1);
+    const px = x + (t * 70 - 6) * k;
+    const lift = Math.sin(t * Math.PI) * (16 + hash(seed * 7 + i) * 10);
+    const pr = (14 + Math.sin(t * Math.PI) * 14 + hash(seed * 13 + i) * 6) * k;
+    const py = y - lift * k + pr * 0.35;
+    const grad = ctx.createRadialGradient(px - pr * 0.25, py - pr * 0.45, pr * 0.1, px, py, pr);
+    grad.addColorStop(0, `rgba(${Math.min(255, r + 20)},${Math.min(255, g + 20)},${Math.min(255, b + 22)},${a})`);
+    grad.addColorStop(0.65, `rgba(${r},${g},${b},${a * 0.95})`);
+    grad.addColorStop(1, `rgba(${Math.round(r * 0.82)},${Math.round(g * 0.84)},${Math.round(b * 0.9)},0)`);
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(px, py, pr, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+/** "rgba(…)" / "rgb(…)" / "#rrggbb" → [r, g, b, alpha]. */
+function rgbaOf(c: string): [number, number, number, number] {
+  const m = c.match(/rgba?\(([^)]+)\)/);
+  if (m) {
+    const p = m[1].split(",").map((v) => parseFloat(v));
+    return [p[0], p[1], p[2], p[3] ?? 1];
+  }
+  const hex = c.replace("#", "");
+  return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16), 1];
 }
 
 function hillLayer(
@@ -1393,12 +1690,49 @@ function hillLayer(
 }
 
 /** Draws one decoration standing at (x, y) in world space (meters, y up). */
-function drawDecor(ctx: CanvasRenderingContext2D, map: MapDef, x: number, y: number, k: number): void {
+export function drawDecor(ctx: CanvasRenderingContext2D, map: MapDef, x: number, y: number, k: number): void {
   const [c1, c2] = map.decorColors;
   ctx.save();
   ctx.translate(x, y);
   ctx.scale(k, k);
   switch (map.decor) {
+    case "robot": {
+      // Robotic arm, side-on: base, upper arm, forearm and gripper, swinging as it works
+      const t = performance.now() / 1000 + x * 0.37;
+      const [paint, dark] = map.decorColors;
+      const sh = -0.3 + Math.sin(t) * 0.35;
+      const el = 1.2 + Math.sin(t * 1.3 + 1) * 0.4;
+      ctx.fillStyle = dark;
+      ctx.fillRect(-0.4, 0, 0.8, 0.2);
+      ctx.fillStyle = paint;
+      ctx.fillRect(-0.25, 0.2, 0.5, 0.4);
+      ctx.save();
+      ctx.translate(0, 0.65);
+      ctx.rotate(sh);
+      ctx.fillStyle = dark;
+      ctx.beginPath();
+      ctx.arc(0, 0, 0.16, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = paint;
+      ctx.fillRect(-0.11, 0, 0.22, 1.2);
+      ctx.translate(0, 1.2);
+      ctx.rotate(-el);
+      ctx.fillStyle = dark;
+      ctx.beginPath();
+      ctx.arc(0, 0, 0.13, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = paint;
+      ctx.fillRect(-0.08, 0, 0.16, 1.0);
+      ctx.translate(0, 1.0);
+      ctx.fillStyle = "#c9ced6";
+      ctx.fillRect(-0.12, 0, 0.24, 0.16);
+      const grip = 0.04 + Math.max(0, Math.sin(t * 2.1)) * 0.06;
+      ctx.fillStyle = dark;
+      ctx.fillRect(-grip - 0.04, 0.16, 0.04, 0.2);
+      ctx.fillRect(grip, 0.16, 0.04, 0.2);
+      ctx.restore();
+      break;
+    }
     case "tree":
     case "maple": {
       ctx.fillStyle = c1;
@@ -1538,6 +1872,250 @@ function drawDecor(ctx: CanvasRenderingContext2D, map: MapDef, x: number, y: num
       ctx.closePath();
       ctx.fill();
       break;
+    case "jungle": {
+      ctx.fillStyle = c1;
+      ctx.beginPath();
+      ctx.moveTo(-0.14, 0);
+      ctx.lineTo(0.14, 0);
+      ctx.lineTo(0.08, 2.0);
+      ctx.lineTo(-0.08, 2.0);
+      ctx.fill();
+      const blobs: [number, number, number][] = [
+        [0, 2.2, 0.55],
+        [-0.6, 2.0, 0.45],
+        [0.6, 2.0, 0.45],
+        [-0.25, 2.55, 0.4],
+        [0.3, 2.5, 0.4],
+      ];
+      for (const [bx, by, br] of blobs) {
+        const g = ctx.createRadialGradient(bx - br * 0.3, by + br * 0.35, 0, bx, by, br);
+        g.addColorStop(0, mixColor(c2, "#ffffff", 0.2));
+        g.addColorStop(1, mixColor(c2, "#000000", 0.35));
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.ellipse(bx, by, br * 1.2, br * 0.75, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // Hanging vines
+      ctx.strokeStyle = mixColor(c2, "#000000", 0.2);
+      ctx.lineWidth = 0.04;
+      for (const vx of [-0.7, -0.3, 0.45, 0.8]) {
+        ctx.beginPath();
+        ctx.moveTo(vx, 1.9);
+        ctx.quadraticCurveTo(vx + 0.1, 1.4, vx - 0.05, 0.9 + Math.abs(vx) * 0.3);
+        ctx.stroke();
+      }
+      break;
+    }
+    case "lamp": {
+      ctx.fillStyle = c1;
+      ctx.fillRect(-0.05, 0, 0.1, 2.6);
+      ctx.fillRect(-0.05, 2.5, 0.6, 0.07);
+      const glow = ctx.createRadialGradient(0.55, 2.4, 0, 0.55, 2.4, 1.1);
+      glow.addColorStop(0, "rgba(255,233,160,0.55)");
+      glow.addColorStop(1, "rgba(255,233,160,0)");
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(0.55, 2.4, 1.1, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = c2;
+      ctx.beginPath();
+      ctx.ellipse(0.55, 2.43, 0.16, 0.07, 0, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    }
+    case "reed": {
+      ctx.lineCap = "round";
+      for (const [dx, hgt, lean] of [
+        [-0.25, 1.1, -0.15],
+        [-0.08, 1.4, -0.05],
+        [0.08, 1.25, 0.08],
+        [0.25, 0.95, 0.18],
+      ]) {
+        const tx = dx + lean;
+        ctx.strokeStyle = c1;
+        ctx.lineWidth = 0.04;
+        ctx.beginPath();
+        ctx.moveTo(dx, 0);
+        ctx.quadraticCurveTo(dx, hgt * 0.6, tx, hgt);
+        ctx.stroke();
+        ctx.strokeStyle = c2;
+        ctx.lineWidth = 0.1;
+        ctx.beginPath();
+        ctx.moveTo(tx - lean * 0.1, hgt - 0.28);
+        ctx.lineTo(tx, hgt - 0.04);
+        ctx.stroke();
+      }
+      break;
+    }
+    case "lollipop": {
+      ctx.fillStyle = "#fff8ee";
+      ctx.fillRect(-0.05, 0, 0.1, 1.5);
+      const r = 0.55;
+      ctx.fillStyle = c2;
+      ctx.beginPath();
+      ctx.arc(0, 1.9, r, 0, Math.PI * 2);
+      ctx.fill();
+      // Swirl
+      ctx.strokeStyle = c1;
+      ctx.lineWidth = 0.12;
+      ctx.beginPath();
+      for (let a = 0; a < Math.PI * 6; a += 0.2) {
+        const rr = (a / (Math.PI * 6)) * r * 0.9;
+        const px = Math.cos(a) * rr;
+        const py = 1.9 + Math.sin(a) * rr;
+        if (a === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+      ctx.fillStyle = "rgba(255,255,255,0.45)";
+      ctx.beginPath();
+      ctx.ellipse(-0.2, 2.12, 0.14, 0.08, -0.6, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    }
+    case "spire": {
+      const g = ctx.createLinearGradient(-0.4, 0, 0.4, 0);
+      g.addColorStop(0, c2);
+      g.addColorStop(1, c1);
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.moveTo(-0.45, 0);
+      ctx.lineTo(-0.25, 0.9);
+      ctx.lineTo(-0.32, 1.1);
+      ctx.lineTo(-0.12, 2.0);
+      ctx.lineTo(0.05, 2.2);
+      ctx.lineTo(0.15, 1.5);
+      ctx.lineTo(0.3, 1.2);
+      ctx.lineTo(0.45, 0);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = "rgba(0,0,0,0.18)";
+      ctx.lineWidth = 0.04;
+      for (const yy of [0.4, 0.95, 1.5]) {
+        ctx.beginPath();
+        ctx.moveTo(-0.4 + yy * 0.18, yy);
+        ctx.lineTo(0.38 - yy * 0.14, yy);
+        ctx.stroke();
+      }
+      break;
+    }
+    case "acacia": {
+      ctx.strokeStyle = c1;
+      ctx.lineCap = "round";
+      ctx.lineWidth = 0.14;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(0.05, 1.1);
+      ctx.lineTo(-0.5, 1.75);
+      ctx.moveTo(0.05, 1.1);
+      ctx.lineTo(0.55, 1.8);
+      ctx.stroke();
+      const g = ctx.createLinearGradient(0, 2.1, 0, 1.65);
+      g.addColorStop(0, mixColor(c2, "#ffffff", 0.15));
+      g.addColorStop(1, mixColor(c2, "#000000", 0.3));
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.ellipse(0, 1.85, 1.2, 0.26, 0, 0, Math.PI * 2);
+      ctx.fill();
+      break;
+    }
+    case "sakura": {
+      ctx.fillStyle = c1;
+      ctx.beginPath();
+      ctx.moveTo(-0.12, 0);
+      ctx.lineTo(0.12, 0);
+      ctx.quadraticCurveTo(0.05, 0.7, 0.18, 1.2);
+      ctx.lineTo(0.02, 1.2);
+      ctx.quadraticCurveTo(-0.05, 0.7, -0.12, 0);
+      ctx.fill();
+      for (const [bx, by, br] of [
+        [0, 1.45, 0.55],
+        [-0.45, 1.25, 0.4],
+        [0.5, 1.3, 0.42],
+        [-0.15, 1.8, 0.38],
+        [0.3, 1.75, 0.36],
+      ] as [number, number, number][]) {
+        const g = ctx.createRadialGradient(bx - br * 0.3, by + br * 0.3, 0, bx, by, br);
+        g.addColorStop(0, mixColor(c2, "#ffffff", 0.45));
+        g.addColorStop(1, mixColor(c2, "#c0507a", 0.3));
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(bx, by, br, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      break;
+    }
+    case "deadtree": {
+      ctx.strokeStyle = c1;
+      ctx.lineCap = "round";
+      ctx.lineWidth = 0.16;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.quadraticCurveTo(0.1, 0.8, -0.05, 1.6);
+      ctx.stroke();
+      ctx.lineWidth = 0.07;
+      for (const [x0, y0, x1, y1, x2, y2] of [
+        [0.0, 1.0, 0.45, 1.3, 0.75, 1.25],
+        [0.02, 1.25, -0.4, 1.6, -0.7, 1.55],
+        [-0.04, 1.5, 0.2, 1.95, 0.45, 2.05],
+        [-0.05, 1.6, -0.3, 2.0, -0.25, 2.2],
+      ]) {
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.quadraticCurveTo(x1, y1, x2, y2);
+        ctx.stroke();
+      }
+      // A little gravestone at the foot of the tree
+      ctx.fillStyle = c2;
+      ctx.beginPath();
+      ctx.moveTo(0.45, 0);
+      ctx.lineTo(0.45, 0.35);
+      ctx.arc(0.62, 0.35, 0.17, Math.PI, 0);
+      ctx.lineTo(0.79, 0);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = "rgba(0,0,0,0.35)";
+      ctx.lineWidth = 0.03;
+      ctx.beginPath();
+      ctx.moveTo(0.62, 0.2);
+      ctx.lineTo(0.62, 0.42);
+      ctx.moveTo(0.54, 0.34);
+      ctx.lineTo(0.7, 0.34);
+      ctx.stroke();
+      break;
+    }
+    case "coral": {
+      ctx.lineCap = "round";
+      // Branching coral
+      ctx.strokeStyle = c1;
+      ctx.lineWidth = 0.13;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(0, 0.6);
+      ctx.lineTo(-0.35, 1.05);
+      ctx.moveTo(0, 0.6);
+      ctx.lineTo(0.3, 1.15);
+      ctx.moveTo(-0.15, 0.82);
+      ctx.lineTo(-0.1, 1.25);
+      ctx.moveTo(0.15, 0.85);
+      ctx.lineTo(0.45, 0.95);
+      ctx.stroke();
+      // Fan coral and seaweed
+      ctx.fillStyle = c2;
+      ctx.beginPath();
+      ctx.ellipse(0.6, 0.32, 0.3, 0.32, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#2f8a5a";
+      ctx.lineWidth = 0.06;
+      for (const sx of [-0.55, -0.45]) {
+        ctx.beginPath();
+        ctx.moveTo(sx, 0);
+        ctx.bezierCurveTo(sx - 0.2, 0.5, sx + 0.2, 0.9, sx - 0.05, 1.4);
+        ctx.stroke();
+      }
+      break;
+    }
     case "crystal":
       for (const [dx, hgt, lean] of [
         [-0.2, 0.9, -0.2],
@@ -1620,55 +2198,161 @@ export function drawMapPreview(canvas: HTMLCanvasElement, map: MapDef): void {
 // ---------- pickups ----------
 
 /** A generic white glue bottle with an orange nozzle cap, centered at the origin (meters, y up). */
-export function drawGlueBottle(ctx: CanvasRenderingContext2D): void {
+/**
+ * Super-glue bottle (1 unit ≈ 1 m, y up): a glossy curvy white bottle with an electric-blue label
+ * (lightning bolt + "GLUE"), a clear window showing the amber glue, a red cap with a ribbed collar
+ * and long nozzle, a shiny drip, and twinkling sparkles around it.
+ */
+export function drawGlueBottle(ctx: CanvasRenderingContext2D, time = 0): void {
+  ctx.save();
   ctx.lineJoin = "round";
-  ctx.strokeStyle = "#2b1d12";
-  ctx.lineWidth = 0.04;
+  ctx.lineCap = "round";
+  const ink = "#1b2233";
+  ctx.lineWidth = 0.035;
+  ctx.strokeStyle = ink;
 
-  ctx.fillStyle = "#ff8a1f";
+  // Nozzle (long and pointed) and ribbed red cap collar
+  const cap = ctx.createLinearGradient(-0.14, 0, 0.14, 0);
+  cap.addColorStop(0, "#ff6a5a");
+  cap.addColorStop(0.45, "#e2241b");
+  cap.addColorStop(1, "#8f120c");
+  ctx.fillStyle = cap;
   ctx.beginPath();
-  ctx.moveTo(-0.05, 0.62);
-  ctx.lineTo(0.05, 0.62);
-  ctx.lineTo(0.12, 0.38);
-  ctx.lineTo(-0.12, 0.38);
+  ctx.moveTo(-0.025, 0.78);
+  ctx.lineTo(0.025, 0.78);
+  ctx.lineTo(0.08, 0.48);
+  ctx.lineTo(-0.08, 0.48);
   ctx.closePath();
   ctx.fill();
   ctx.stroke();
-  ctx.fillRect(-0.16, 0.3, 0.32, 0.1);
-  ctx.strokeRect(-0.16, 0.3, 0.32, 0.1);
-
-  const body = ctx.createLinearGradient(-0.28, 0, 0.28, 0);
-  body.addColorStop(0, "#ffffff");
-  body.addColorStop(0.7, "#f0f0f0");
-  body.addColorStop(1, "#c9c9c9");
-  ctx.fillStyle = body;
   ctx.beginPath();
-  ctx.moveTo(-0.2, 0.3);
-  ctx.lineTo(0.2, 0.3);
-  ctx.quadraticCurveTo(0.28, 0.24, 0.28, 0.12);
-  ctx.lineTo(0.28, -0.4);
-  ctx.quadraticCurveTo(0.28, -0.48, 0.2, -0.48);
-  ctx.lineTo(-0.2, -0.48);
-  ctx.quadraticCurveTo(-0.28, -0.48, -0.28, -0.4);
-  ctx.lineTo(-0.28, 0.12);
-  ctx.quadraticCurveTo(-0.28, 0.24, -0.2, 0.3);
+  ctx.roundRect(-0.15, 0.32, 0.3, 0.17, 0.04);
+  ctx.fill();
+  ctx.stroke();
+  ctx.strokeStyle = "rgba(0,0,0,0.35)";
+  ctx.lineWidth = 0.018;
+  for (let k = -2; k <= 2; k++) {
+    ctx.beginPath();
+    ctx.moveTo(k * 0.05, 0.34);
+    ctx.lineTo(k * 0.05, 0.47);
+    ctx.stroke();
+  }
+  ctx.fillStyle = "rgba(255,255,255,0.55)";
+  ctx.fillRect(-0.12, 0.44, 0.24, 0.025);
+
+  // Bottle: curvy shoulders, glossy white
+  ctx.strokeStyle = ink;
+  ctx.lineWidth = 0.035;
+  const body = new Path2D();
+  body.moveTo(-0.14, 0.32);
+  body.bezierCurveTo(-0.3, 0.28, -0.32, 0.12, -0.31, -0.02);
+  body.lineTo(-0.3, -0.42);
+  body.quadraticCurveTo(-0.3, -0.52, -0.2, -0.52);
+  body.lineTo(0.2, -0.52);
+  body.quadraticCurveTo(0.3, -0.52, 0.3, -0.42);
+  body.lineTo(0.31, -0.02);
+  body.bezierCurveTo(0.32, 0.12, 0.3, 0.28, 0.14, 0.32);
+  body.closePath();
+  const white = ctx.createLinearGradient(-0.32, 0, 0.32, 0);
+  white.addColorStop(0, "#ffffff");
+  white.addColorStop(0.55, "#eef2f8");
+  white.addColorStop(1, "#b9c2d0");
+  ctx.fillStyle = white;
+  ctx.fill(body);
+  ctx.save();
+  ctx.clip(body);
+  // Clear window with the amber glue inside (sloshing gently)
+  const level = 0.12 + Math.sin(time * 3) * 0.015;
+  ctx.fillStyle = "rgba(190, 215, 240, 0.55)";
+  ctx.fillRect(-0.32, 0.08, 0.64, 0.16);
+  const glue = ctx.createLinearGradient(0, -0.1, 0, level);
+  glue.addColorStop(0, "#ff9d00");
+  glue.addColorStop(1, "#ffd25a");
+  ctx.fillStyle = glue;
+  ctx.fillRect(-0.32, 0.08, 0.64, level - 0.08 + 0.01);
+  // Electric-blue label
+  const label = ctx.createLinearGradient(0, -0.4, 0, 0.06);
+  label.addColorStop(0, "#1546b8");
+  label.addColorStop(0.5, "#2f7ae5");
+  label.addColorStop(1, "#5fb0ff");
+  ctx.fillStyle = label;
+  ctx.fillRect(-0.32, -0.42, 0.64, 0.48);
+  // Yellow lightning bolt across the label
+  ctx.fillStyle = "#ffd60a";
+  ctx.strokeStyle = ink;
+  ctx.lineWidth = 0.02;
+  ctx.beginPath();
+  ctx.moveTo(0.06, 0.04);
+  ctx.lineTo(-0.14, -0.15);
+  ctx.lineTo(-0.02, -0.15);
+  ctx.lineTo(-0.08, -0.38);
+  ctx.lineTo(0.14, -0.13);
+  ctx.lineTo(0.02, -0.13);
   ctx.closePath();
   ctx.fill();
   ctx.stroke();
-
-  ctx.fillStyle = "#2f7ae5";
-  ctx.fillRect(-0.28, -0.3, 0.56, 0.36);
-  ctx.strokeRect(-0.28, -0.3, 0.56, 0.36);
+  // "GLUE" lettering (drawn upright)
+  ctx.save();
+  ctx.scale(1, -1);
+  ctx.font = "900 0.13px Fredoka, 'Arial Rounded MT Bold', system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.lineWidth = 0.03;
+  ctx.strokeStyle = ink;
+  ctx.strokeText("GLUE", 0, 0.33);
   ctx.fillStyle = "#ffffff";
+  ctx.fillText("GLUE", 0, 0.33);
+  ctx.restore();
+  // Gloss streak down the left side
+  const gloss = ctx.createLinearGradient(-0.26, 0, -0.14, 0);
+  gloss.addColorStop(0, "rgba(255,255,255,0)");
+  gloss.addColorStop(0.5, "rgba(255,255,255,0.85)");
+  gloss.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = gloss;
+  ctx.fillRect(-0.26, -0.46, 0.12, 0.72);
+  ctx.restore();
+  ctx.strokeStyle = ink;
+  ctx.lineWidth = 0.035;
+  ctx.stroke(body);
+
+  // A glossy drip of glue running down from the nozzle tip over the cap
+  const drip = ctx.createLinearGradient(0, 0.8, 0, 0.3);
+  drip.addColorStop(0, "#ffd25a");
+  drip.addColorStop(1, "#ff9d00");
+  ctx.fillStyle = drip;
   ctx.beginPath();
-  ctx.moveTo(0, 0.0);
-  ctx.quadraticCurveTo(0.1, -0.12, 0.08, -0.17);
-  ctx.arc(0, -0.17, 0.08, 0, Math.PI);
-  ctx.quadraticCurveTo(-0.1, -0.12, 0, 0.0);
+  ctx.moveTo(0.0, 0.79);
+  ctx.quadraticCurveTo(0.09, 0.62, 0.07, 0.42);
+  ctx.arc(0.07, 0.38, 0.045, Math.PI / 2, Math.PI * 2.5);
+  ctx.quadraticCurveTo(0.05, 0.6, -0.01, 0.76);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = "rgba(255,255,255,0.8)";
+  ctx.beginPath();
+  ctx.arc(0.06, 0.39, 0.012, 0, Math.PI * 2);
   ctx.fill();
 
-  ctx.fillStyle = "rgba(255,255,255,0.8)";
-  ctx.fillRect(-0.21, 0.08, 0.05, 0.16);
+  // Twinkling sparkles
+  for (let k = 0; k < 4; k++) {
+    const a = time * 1.6 + k * 1.57;
+    const tw = 0.5 + 0.5 * Math.sin(time * 5 + k * 2.1);
+    const sx = Math.cos(a) * 0.48;
+    const sy = 0.05 + Math.sin(a * 1.3) * 0.42;
+    const r = 0.035 + tw * 0.045;
+    ctx.fillStyle = `rgba(255, 255, 255, ${0.35 + tw * 0.65})`;
+    ctx.beginPath();
+    ctx.moveTo(sx, sy + r);
+    ctx.lineTo(sx + r * 0.25, sy + r * 0.25);
+    ctx.lineTo(sx + r, sy);
+    ctx.lineTo(sx + r * 0.25, sy - r * 0.25);
+    ctx.lineTo(sx, sy - r);
+    ctx.lineTo(sx - r * 0.25, sy - r * 0.25);
+    ctx.lineTo(sx - r, sy);
+    ctx.lineTo(sx - r * 0.25, sy + r * 0.25);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
 }
 
 /** Red jerrycan. */
@@ -1761,7 +2445,7 @@ function drawGauges(ctx: CanvasRenderingContext2D, w: number, h: number, g: Gaug
   const a0 = Math.PI * 0.75;
   const span = Math.PI * 1.5;
   // RPM ring
-  const rpmFrac = Math.min(1, g.rpm / 7000);
+  const rpmFrac = Math.min(1, g.rpm / (g.redline * 1.05));
   ctx.lineCap = "round";
   ctx.lineWidth = 5;
   ctx.strokeStyle = "rgba(255,255,255,0.12)";
@@ -1772,10 +2456,12 @@ function drawGauges(ctx: CanvasRenderingContext2D, w: number, h: number, g: Gaug
   ctx.beginPath();
   ctx.arc(cx, cy, r - 6, a0, a0 + span * rpmFrac);
   ctx.stroke();
-  // Speed ticks
-  const maxKmh = 140;
-  for (let k = 0; k <= 14; k++) {
-    const a = a0 + (span * k) / 14;
+  // Speed ticks: a tick every 10 units, 0–140 km/h or 0–90 mph
+  const speed = g.mph ? g.kmh * KMH_TO_MPH : g.kmh;
+  const maxSpeed = g.mph ? 90 : 140;
+  const ticks = maxSpeed / 10;
+  for (let k = 0; k <= ticks; k++) {
+    const a = a0 + (span * k) / ticks;
     const major = k % 2 === 0;
     ctx.strokeStyle = "#e6e9f0";
     ctx.lineWidth = major ? 2 : 1;
@@ -1784,7 +2470,7 @@ function drawGauges(ctx: CanvasRenderingContext2D, w: number, h: number, g: Gaug
     ctx.lineTo(cx + Math.cos(a) * r * 0.8, cy + Math.sin(a) * r * 0.8);
     ctx.stroke();
   }
-  const na = a0 + (span * Math.min(maxKmh, g.kmh)) / maxKmh;
+  const na = a0 + (span * Math.min(maxSpeed, speed)) / maxSpeed;
   ctx.strokeStyle = "#ff8a1f";
   ctx.lineWidth = 3;
   ctx.beginPath();
@@ -1799,15 +2485,20 @@ function drawGauges(ctx: CanvasRenderingContext2D, w: number, h: number, g: Gaug
   ctx.textBaseline = "middle";
   ctx.fillStyle = "#ffffff";
   ctx.font = `bold ${Math.round(r * 0.36)}px Trebuchet MS, sans-serif`;
-  ctx.fillText(String(Math.round(g.kmh)), cx, cy + r * 0.32);
+  ctx.fillText(String(Math.round(speed)), cx, cy + r * 0.32);
   ctx.font = `${Math.round(r * 0.15)}px Trebuchet MS, sans-serif`;
   ctx.fillStyle = "#9aa0ad";
-  ctx.fillText("km/h", cx, cy + r * 0.56);
+  ctx.fillText(g.mph ? "mph" : "km/h", cx, cy + r * 0.56);
   ctx.fillStyle = "#4fc3ff";
   ctx.font = `bold ${Math.round(r * 0.2)}px Trebuchet MS, sans-serif`;
   ctx.fillText(g.rpm > 0 ? `${g.gear + 1}` : "–", cx, cy - r * 0.36);
 
-  // Fuel gauge beside the speedo
+  // Gyro to the left of the speedo
+  const gr = r * 0.62;
+  drawGyro(ctx, cx - r - 22 - gr, cy - r * 0.1, gr, g.attitude);
+
+  // Fuel gauge beside the speedo (hidden when fuel is switched off)
+  if (g.fuel < 0) return;
   const fw = r * 1.2;
   const fx = cx + r + 14;
   const fy = cy + r * 0.35;
@@ -1944,5 +2635,370 @@ function drawSmash(ctx: CanvasRenderingContext2D, w: number, h: number, t: numbe
   ctx.fillStyle = "rgba(255,255,255,0.7)";
   ctx.beginPath();
   ctx.ellipse(cx - yr * 0.35, cy - yr * 0.38, yr * 0.22, yr * 0.12, -0.5, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+/** City skyline silhouettes with a few lit windows (screen space, parallax-scrolled). */
+function drawSkyline(ctx: CanvasRenderingContext2D, w: number, h: number, off: number, color: string, time: number): void {
+  const base = h * 0.74;
+  const bw = 46;
+  const start = Math.floor(off / bw) - 1;
+  for (let i = start; i < start + w / bw + 3; i++) {
+    const x = i * bw - off;
+    const bh = 60 + hash(i * 1.7) * 170;
+    const width = bw * (0.7 + hash(i * 2.3) * 0.3);
+    ctx.fillStyle = color;
+    ctx.fillRect(x, base - bh, width, bh + 2);
+    // Antenna on some towers
+    if (hash(i * 5.1) > 0.75) ctx.fillRect(x + width / 2 - 1, base - bh - 18, 2, 18);
+    // Windows
+    for (let wy = base - bh + 8; wy < base - 6; wy += 11) {
+      for (let wx = x + 5; wx < x + width - 6; wx += 9) {
+        const lit = hash(wx * 0.37 + wy * 1.13 + i) > 0.62;
+        if (!lit) continue;
+        const flicker = hash(Math.floor(time * 0.2) + wx + wy) > 0.97 ? 0.3 : 1;
+        ctx.fillStyle = `rgba(255, 220, 140, ${0.75 * flicker})`;
+        ctx.fillRect(wx, wy, 4, 5);
+      }
+    }
+  }
+}
+
+/**
+ * Falling rain over the view: a cool grey wash and slanted streaks, all in one path (cheap).
+ * Streak positions come from a hash of their index, so nothing is stored between frames.
+ */
+export function drawRain(ctx: CanvasRenderingContext2D, w: number, h: number, time: number, k: number): void {
+  ctx.save();
+  ctx.fillStyle = `rgba(28, 36, 50, ${0.14 * k})`;
+  ctx.fillRect(0, 0, w, h);
+  const n = Math.round(90 + 150 * k);
+  ctx.strokeStyle = "rgba(205, 218, 235, 0.38)";
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  for (let i = 0; i < n; i++) {
+    const speed = 900 + hash(i * 3.1) * 500;
+    const len = 14 + hash(i * 7.7) * 18;
+    const y = ((hash(i * 1.3) * (h + 60) + time * speed) % (h + 60)) - 30;
+    const x = ((hash(i * 5.9) * (w + 120) - time * speed * 0.18) % (w + 120) + (w + 120)) % (w + 120) - 60;
+    ctx.moveTo(x, y);
+    ctx.lineTo(x - len * 0.18, y + len);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** How dark it is outside: 1 on night terrains, following the clock where there's a day/night cycle. */
+export function nightOf(scene: Scene): number {
+  if (viewMap(scene.terrain.map, scene.car.chassis.getPosition().x).stars) return 1;
+  return scene.dayTime === null ? 0 : daylight(scene.dayTime).night;
+}
+
+/** Classic 2D: a warm wash at sunset and a deep blue one at night over the world. */
+function drawDayTint(ctx: CanvasRenderingContext2D, w: number, h: number, scene: Scene): void {
+  if (scene.dayTime === null) return;
+  const d = daylight(scene.dayTime);
+  const golden = d.dusk * 0.85 * (1 - d.night);
+  if (golden > 0.02) {
+    ctx.fillStyle = `rgba(255, 130, 60, ${0.16 * golden})`;
+    ctx.fillRect(0, 0, w, h);
+  }
+  if (d.night > 0.02) {
+    ctx.fillStyle = `rgba(6, 10, 32, ${0.62 * d.night})`;
+    ctx.fillRect(0, 0, w, h);
+  }
+}
+
+/**
+ * Distance sign artwork: a road sign with a reflective white border and bold lettering.
+ * Every 50 m a green sign; every 250 m a bigger blue milestone sign with an egg badge.
+ */
+export function paintDistanceSign(g: CanvasRenderingContext2D, w: number, h: number, meters: number): void {
+  const milestone = meters % 250 === 0;
+  const r = h * 0.16;
+  const face = milestone ? "#1d5fb8" : "#1f7a3f";
+  g.clearRect(0, 0, w, h);
+  // Panel with a soft vertical sheen (reflective sheeting)
+  const grad = g.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, shade(face, 1.18));
+  grad.addColorStop(0.5, face);
+  grad.addColorStop(1, shade(face, 0.82));
+  g.fillStyle = grad;
+  g.beginPath();
+  g.roundRect(0, 0, w, h, r);
+  g.fill();
+  // White border, inset
+  const b = h * 0.07;
+  g.strokeStyle = "#ffffff";
+  g.lineWidth = h * 0.05;
+  g.beginPath();
+  g.roundRect(b, b, w - b * 2, h - b * 2, r * 0.7);
+  g.stroke();
+  // Egg badge on milestones
+  let textX = w / 2;
+  if (milestone) {
+    const ex = w * 0.17;
+    const ey = h * 0.52;
+    g.fillStyle = "#ffffff";
+    g.beginPath();
+    g.ellipse(ex, ey, h * 0.17, h * 0.22, 0, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = face;
+    g.beginPath();
+    g.ellipse(ex - h * 0.05, ey - h * 0.07, h * 0.04, h * 0.06, -0.4, 0, Math.PI * 2);
+    g.fill();
+    textX = w * 0.6;
+  }
+  // Lettering
+  g.fillStyle = "#ffffff";
+  g.textAlign = "center";
+  g.textBaseline = "middle";
+  const label = meters >= 1000 ? `${(meters / 1000).toFixed(meters % 1000 === 0 ? 0 : 2)} km` : `${meters} m`;
+  let size = h * 0.48;
+  g.font = `700 ${size}px Fredoka, "Arial Rounded MT Bold", "Trebuchet MS", sans-serif`;
+  const maxW = (milestone ? w * 0.66 : w * 0.82);
+  while (g.measureText(label).width > maxW && size > 8) {
+    size *= 0.92;
+    g.font = `700 ${size}px Fredoka, "Arial Rounded MT Bold", "Trebuchet MS", sans-serif`;
+  }
+  g.fillText(label, textX, h * 0.54);
+}
+
+function shade(hex: string, k: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  const c = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => Math.max(0, Math.min(255, Math.round(v * k))));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
+/** Background silhouettes of factory robots walking across the hall (2D views). */
+function drawWalkingRobots(ctx: CanvasRenderingContext2D, w: number, h: number, off: number, scale: number): void {
+  const t = performance.now() / 1000;
+  const span = w + 200;
+  for (let i = 0; i < 6; i++) {
+    const dir = hash(i * 9.1) > 0.5 ? 1 : -1;
+    const speed = 18 + hash(i * 5.7) * 22;
+    const x = ((((hash(i * 7.1) * span + dir * t * speed - off) % span) + span) % span) - 100;
+    const k = (26 + hash(i * 3.3) * 18) * Math.max(0.6, scale);
+    const ground = h * (0.7 + hash(i * 1.7) * 0.06);
+    const phase = t * 4 + i * 2;
+    const swing = Math.sin(phase) * 0.5;
+    const bob = Math.abs(Math.sin(phase)) * k * 0.04;
+    ctx.save();
+    ctx.translate(x, ground - bob);
+    ctx.scale(dir, 1);
+    ctx.fillStyle = "rgba(40, 42, 48, 0.85)";
+    // Legs
+    for (const s of [swing, -swing]) {
+      ctx.save();
+      ctx.translate(0, -k * 1.0);
+      ctx.rotate(s);
+      ctx.fillRect(-k * 0.08, 0, k * 0.16, k * 1.0);
+      ctx.restore();
+    }
+    // Torso, head, antenna
+    ctx.fillRect(-k * 0.3, -k * 1.8, k * 0.6, k * 0.82);
+    ctx.fillRect(-k * 0.2, -k * 2.18, k * 0.4, k * 0.34);
+    ctx.fillRect(-k * 0.015, -k * 2.45, k * 0.03, k * 0.28);
+    // Arm (one visible, swinging opposite the near leg)
+    ctx.save();
+    ctx.translate(0, -k * 1.7);
+    ctx.rotate(-swing * 0.8);
+    ctx.fillRect(-k * 0.06, 0, k * 0.12, k * 0.65);
+    ctx.restore();
+    // Glowing visor and antenna tip
+    ctx.fillStyle = "rgba(90, 210, 255, 0.95)";
+    ctx.fillRect(k * 0.08, -k * 2.1, k * 0.14, k * 0.07);
+    ctx.fillStyle = "rgba(255, 80, 60, 0.95)";
+    ctx.beginPath();
+    ctx.arc(0, -k * 2.47, k * 0.04, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+// ---------- sky obstacles ----------
+
+const BALLOON_COLORS: [string, string][] = [
+  ["#e94b3c", "#ffd23f"],
+  ["#3c8de9", "#ffffff"],
+  ["#8e4be9", "#ffb13f"],
+  ["#2fbf71", "#fff3b0"],
+  ["#ff6fae", "#7fe0ff"],
+];
+
+/** A hot-air balloon: striped envelope, ropes and a wicker basket, swaying gently. */
+function drawBalloon(ctx: CanvasRenderingContext2D, o: SkyObstacle, time: number): void {
+  const r = o.size;
+  const [c1, c2] = BALLOON_COLORS[Math.floor(o.seed * BALLOON_COLORS.length) % BALLOON_COLORS.length];
+  ctx.save();
+  ctx.translate(o.x, o.y);
+  ctx.rotate(Math.sin(time * 0.8 + o.seed * 9) * 0.03);
+  const basketY = -r - 1.3;
+  // Ropes
+  ctx.strokeStyle = "#5a4630";
+  ctx.lineWidth = 0.04;
+  ctx.beginPath();
+  for (const s of [-1, -0.35, 0.35, 1]) {
+    ctx.moveTo(s * r * 0.45, -r * 0.88);
+    ctx.lineTo(s * 0.4, basketY + 0.4);
+  }
+  ctx.stroke();
+  // Basket
+  ctx.fillStyle = "#a8743f";
+  ctx.fillRect(-0.45, basketY - 0.4, 0.9, 0.8);
+  ctx.strokeStyle = "#6e4721";
+  ctx.lineWidth = 0.05;
+  for (let y = basketY - 0.25; y < basketY + 0.4; y += 0.22) {
+    ctx.beginPath();
+    ctx.moveTo(-0.45, y);
+    ctx.lineTo(0.45, y);
+    ctx.stroke();
+  }
+  ctx.fillStyle = "#6e4721";
+  ctx.fillRect(-0.5, basketY + 0.32, 1, 0.12);
+  // Burner flame flickers
+  const fl = 0.18 + 0.1 * Math.sin(time * 23 + o.seed * 40);
+  ctx.fillStyle = "rgba(255,170,40,0.9)";
+  ctx.beginPath();
+  ctx.ellipse(0, basketY + 0.75, 0.1, fl, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Envelope: teardrop with vertical gores
+  const env = () => {
+    ctx.beginPath();
+    ctx.moveTo(-r * 0.32, -r * 0.92);
+    ctx.bezierCurveTo(-r * 1.25, -r * 0.2, -r * 1.15, r * 1.05, 0, r * 1.02);
+    ctx.bezierCurveTo(r * 1.15, r * 1.05, r * 1.25, -r * 0.2, r * 0.32, -r * 0.92);
+    ctx.closePath();
+  };
+  env();
+  ctx.fillStyle = c1;
+  ctx.fill();
+  ctx.save();
+  env();
+  ctx.clip();
+  ctx.fillStyle = c2;
+  for (const k of [-0.62, 0, 0.62]) {
+    ctx.beginPath();
+    ctx.ellipse(k * r, 0, r * 0.14, r * 1.2, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // Round shading
+  const g = ctx.createRadialGradient(-r * 0.35, r * 0.4, r * 0.1, 0, 0, r * 1.2);
+  g.addColorStop(0, "rgba(255,255,255,0.35)");
+  g.addColorStop(0.6, "rgba(255,255,255,0)");
+  g.addColorStop(1, "rgba(0,0,0,0.25)");
+  ctx.fillStyle = g;
+  ctx.fillRect(-r * 1.3, -r * 1.1, r * 2.6, r * 2.3);
+  ctx.restore();
+  env();
+  ctx.strokeStyle = "rgba(0,0,0,0.35)";
+  ctx.lineWidth = 0.06;
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** A floating rock island: grassy top, layered rock underneath, a little tree and hanging vines. */
+function drawIsland(ctx: CanvasRenderingContext2D, o: SkyObstacle): void {
+  const pts = Terrain.islandOutline(o);
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for (const p of pts.slice(1)) ctx.lineTo(p.x, p.y);
+  ctx.closePath();
+  const g = ctx.createLinearGradient(0, o.y, 0, o.y - o.size * 1.2);
+  g.addColorStop(0, "#9b7653");
+  g.addColorStop(0.5, "#7a5a3e");
+  g.addColorStop(1, "#5a4030");
+  ctx.fillStyle = g;
+  ctx.fill();
+  ctx.strokeStyle = "rgba(40,25,15,0.5)";
+  ctx.lineWidth = 0.06;
+  ctx.stroke();
+  // Rock strata
+  ctx.clip();
+  ctx.strokeStyle = "rgba(60,40,25,0.35)";
+  ctx.lineWidth = 0.08;
+  for (let k = 1; k < 4; k++) {
+    ctx.beginPath();
+    ctx.moveTo(o.x - o.size, o.y - k * o.size * 0.25);
+    ctx.lineTo(o.x + o.size, o.y - k * o.size * 0.25 + 0.15);
+    ctx.stroke();
+  }
+  ctx.restore();
+  // Grass cap and vines
+  ctx.fillStyle = "#5cbf45";
+  ctx.fillRect(o.x - o.size, o.y - 0.28, o.size * 2, 0.32);
+  ctx.fillStyle = "#7dd65a";
+  ctx.fillRect(o.x - o.size, o.y - 0.06, o.size * 2, 0.12);
+  ctx.strokeStyle = "#3f8f34";
+  ctx.lineWidth = 0.06;
+  for (let k = 0; k < 4; k++) {
+    const vx = o.x - o.size * 0.7 + k * o.size * 0.45;
+    ctx.beginPath();
+    ctx.moveTo(vx, o.y - 0.25);
+    ctx.quadraticCurveTo(vx + 0.2, o.y - 0.8, vx - 0.05, o.y - 1.2 - ((k * 37 + o.seed * 10) % 1) * 0.8);
+    ctx.stroke();
+  }
+  // A little tree
+  const tx = o.x + (o.seed - 0.5) * o.size;
+  ctx.fillStyle = "#6b4423";
+  ctx.fillRect(tx - 0.1, o.y, 0.2, 1.1);
+  ctx.fillStyle = "#4caf3f";
+  ctx.beginPath();
+  ctx.arc(tx, o.y + 1.4, 0.6, 0, Math.PI * 2);
+  ctx.arc(tx - 0.4, o.y + 1.1, 0.4, 0, Math.PI * 2);
+  ctx.arc(tx + 0.42, o.y + 1.15, 0.42, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+/** A jagged lightning bolt from (x, y0) down to (x, y1), wiggling on each frame. */
+function boltPath(ctx: CanvasRenderingContext2D, x: number, y0: number, y1: number, time: number): void {
+  ctx.beginPath();
+  ctx.moveTo(x, y0);
+  const n = 9;
+  for (let i = 1; i < n; i++) {
+    const y = y0 + ((y1 - y0) * i) / n;
+    const j = Math.sin(i * 12.9898 + Math.floor(time * 20) * 78.233) * 43758.5453;
+    ctx.lineTo(x + ((j - Math.floor(j)) - 0.5) * 1.6, y);
+  }
+  ctx.lineTo(x, y1);
+}
+
+/** A dark storm cloud. It flickers before striking the road below with lightning. */
+function drawStorm(ctx: CanvasRenderingContext2D, o: SkyObstacle, time: number, groundY: number): void {
+  const phase = stormPhase(o, time);
+  const flick = phase === "warn" && Math.sin(time * 40) > 0.3 ? 1 : 0;
+  // Danger zone on the road
+  if (phase !== "idle") {
+    ctx.fillStyle = phase === "strike" ? "rgba(255,240,140,0.55)" : `rgba(255,220,90,${0.12 + flick * 0.2})`;
+    ctx.beginPath();
+    ctx.ellipse(o.x, groundY + 0.05, STORM.reach, 0.35, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  if (phase === "strike") {
+    ctx.save();
+    ctx.lineJoin = "round";
+    boltPath(ctx, o.x, o.y - 1.2, groundY, time);
+    ctx.strokeStyle = "rgba(160,210,255,0.5)";
+    ctx.lineWidth = 0.55;
+    ctx.stroke();
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 0.16;
+    ctx.stroke();
+    ctx.restore();
+  }
+  // Cloud puffs
+  const w = o.size;
+  const base = phase === "strike" ? "#9aa3c4" : flick ? "#7d86a8" : "#4b5068";
+  const puffs: [number, number, number][] = [
+    [-0.75, -0.2, 0.42], [-0.35, 0.2, 0.55], [0.15, 0.3, 0.6], [0.6, 0, 0.45], [0.9, -0.3, 0.32], [-1, -0.35, 0.3], [0, -0.35, 0.5],
+  ];
+  ctx.fillStyle = "#353a50";
+  ctx.beginPath();
+  for (const [px, py, pr] of puffs) ctx.arc(o.x + px * w, o.y + py * w * 0.5 - 0.25, pr * w * 0.55, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = base;
+  ctx.beginPath();
+  for (const [px, py, pr] of puffs) ctx.arc(o.x + px * w, o.y + py * w * 0.5, pr * w * 0.5, 0, Math.PI * 2);
   ctx.fill();
 }
